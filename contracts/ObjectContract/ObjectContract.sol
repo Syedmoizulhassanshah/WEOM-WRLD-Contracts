@@ -20,15 +20,9 @@ contract ObjectContract is
     OwnableUpgradeable,
     UUPSUpgradeable
 {
-    enum AdminRoles {
-        NONE,
-        MINTER,
-        MANAGER
-    }
-
     string public baseURI;
     bool public isPublicSaleActive;
-    bool public isMintingPause;
+    bool public isMintingEnable;
 
     struct Objects {
         string name;
@@ -38,19 +32,24 @@ contract ObjectContract is
         string metadataHash;
     }
 
-    mapping(uint => Objects) public object;
+    enum AdminRoles {
+        NONE,
+        MINTER,
+        MANAGER
+    }
+
+    mapping(uint256 => Objects) public object;
     mapping(address => AdminRoles) public adminWhitelistedAddresses;
 
-    event SetBaseURI(string baseURI, address addedBy);
-    event ObjectMinted(uint objectId, address mintedBy, string metadataHash);
+    event UpdatedBaseURI(string baseURI, address addedBy);
+    event ObjectMinted(uint256 objectId, address mintedBy, string metadataHash);
     event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
     event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
-
     event MintingStatusUpdated(bool status, address updatedBy);
     event ConstructorInitialized(string baseURI, address updatedBy);
 
     function initialize() public initializer {
-        __ERC721_init("ObjectContract", "W-Land");
+        __ERC721_init("ObjectContract", "W-Objects");
         __Pausable_init();
         __Ownable_init();
         __UUPSUpgradeable_init();
@@ -71,8 +70,14 @@ contract ObjectContract is
         }
     }
 
+    /**
+     * @dev _storeObjectsInformation is used to store the object information.
+     * Requirement:
+     * - This is an internal function
+     */
+
     function _storeObjectsInformation(
-        uint objectId,
+        uint256 objectId,
         string memory name,
         string memory objectType,
         string memory twoDimensional,
@@ -89,7 +94,8 @@ contract ObjectContract is
     /**
      * @dev updateContractPauseStatus is used to pause/unpause contract status.
      * Requirement:
-     * - This function can only called manger role
+     * - This function can only called by manager role
+     *
      * @param status - bool true/false
      */
 
@@ -108,15 +114,17 @@ contract ObjectContract is
     /**
      * @dev updateMintingStatus is used to update mintng status.
      * Requirement:
-     * - This function can only called manger role
+     * - This function can only called by manager role
+     *
      * @param _status - status bool
+     *
      * Emits a {MintingStatusUpdated} event.
      */
 
     function updateMintingStatus(bool _status) external {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
 
-        isMintingPause = _status;
+        isMintingEnable = _status;
 
         emit MintingStatusUpdated(_status, msg.sender);
     }
@@ -124,23 +132,19 @@ contract ObjectContract is
     /**
      * @dev updateBaseURI is used to set BaseURI.
      * Requirement:
-     * - This function can only called manger role
+     * - This function can only called by manager role
      *
      * @param _baseURI - New baseURI
      *
-     * Emits a {SetBaseURI} event.
+     * Emits a {UpdatedBaseURI} event.
      */
 
-    function updateBaseURI(string memory _baseURI) external onlyOwner {
+    function updateBaseURI(string memory _baseURI) external {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
-
-        if (bytes(_baseURI).length <= 0) {
-            revert EmptyURL();
-        }
 
         baseURI = _baseURI;
 
-        emit SetBaseURI(baseURI, msg.sender);
+        emit UpdatedBaseURI(baseURI, msg.sender);
     }
 
     /**
@@ -213,7 +217,7 @@ contract ObjectContract is
         _isWhitelistedAdmin(AdminRoles.MINTER);
         _verifyMetadataHash(metadataHash);
 
-        if (!isMintingPause) {
+        if (!isMintingEnable) {
             revert MintingStatusPaused();
         }
 
@@ -269,8 +273,8 @@ contract ObjectContract is
 
         if (balanceOf(_address) == 0) revert AddressNotExist();
 
-        uint objectIndex;
-        for (uint i = 0; i < balanceOf(_address); i++) {
+        uint256 objectIndex;
+        for (uint256 i = 0; i < balanceOf(_address); i++) {
             console.log(balanceOf(_address));
             uint256 tokenId = tokenOfOwnerByIndex(_address, i);
             console.log(tokenId);
@@ -290,11 +294,10 @@ contract ObjectContract is
     /**
      * @dev tokenURI is used to get tokenURI link.
      *
-     * @param objectId - ID of drone
-     *
-     * @return string .
+     * @param objectId - ID of object
      */
-    function tokenURI(uint objectId)
+
+    function tokenURI(uint256 objectId)
         public
         view
         override(ERC721Upgradeable)

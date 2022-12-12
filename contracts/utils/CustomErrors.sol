@@ -1,23 +1,20 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.8.15;
 
-import "hardhat/console.sol";
-
-contract CustomErrors {
-    error EmptyURL();
-    error InvalidMetadataHash();
-    error AlreadyWhitelisted();
-    error NotWhitelistedAddress();
-    error InvalidBaseURI();
-    error MintingLimitReached();
-    error PlatformMintingLimitReached();
-    error MaxMintingLimitReached();
-    error UsersMintingLimitReached();
-    error PublicSaleNotActive();
-    error PublicSaleActivated();
-    error MintingStatusPaused();
-    error AddressIsAlreadyRemoved();
-    error IdNotExist();
-    error AddressNotExist();
-    error AddressIsAlreadyWhitelisted();
-}
+error CannotMint(string error);
+error AddressAlreadyExists();
+error AddressNotExists();
+error MintingStatusPaused();
+error AlreadySameStatus();
+error AlreadyExists(string error);
+error AddressMismatched();
+error UserMintingLimitExceeds();
+error NotExists();
+error GameIdNotExists();
+error UserIdNotExists();
+error InvalidParameters(string error);
+error AlreadyDeactivated();
+error AlreadyActivated();
+error NotPremiumWhitelistUser();
+error NotNormalWhitelistUser();
+error TransferDisabled();
