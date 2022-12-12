@@ -20,5 +20,4 @@ contract CustomErrors {
     error IdNotExist();
     error AddressNotExist();
     error AddressIsAlreadyWhitelisted();
-    error IdAlreadyExist();
 }

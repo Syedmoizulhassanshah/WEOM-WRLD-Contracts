@@ -1,16 +1,14 @@
-const ethUtil = require('ethereumjs-util');
 const { MerkleTree } = require('merkletreejs')
 const keccak256 = require('keccak256')
 
-// all hardhat local node address
 let whitelistAddresses = [
-  '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
-  '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-  '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
-  '0x90F79bf6EB2c4f870365E785982E1f101E93b906 ',
-  '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65',
-  '0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc',
-  '0x976EA74026E726554dB657fA54763abd0C3a0aa9',
+  '0X5B38DA6A701C568545DCFCB03FCB875F56BEDDC4',
+  '0X5A641E5FB72A2FD9137312E7694D42996D689D99',
+  '0XDCAB482177A592E424D1C8318A464FC922E8DE40',
+  '0X6E21D37E07A6F7E53C7ACE372CEC63D4AE4B6BD0',
+  '0X09BAAB19FC77C19898140DADD30C4685C597620B',
+  '0XCC4C29997177253376528C05D3DF91CF2D69061A',
+  '0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2', // The address in remix
 ]
 
 const leafNodes = whitelistAddresses.map((addr) => keccak256(addr))
@@ -18,11 +16,10 @@ const merkleTree = new MerkleTree(leafNodes, keccak256, { sortPairs: true })
 
 const rootHash = merkleTree.getRoot()
 console.log('Whitelist Merkle Tree\n', merkleTree.toString())
-console.log('Root Hash: ', ethUtil.bufferToHex(rootHash));
-//console.log('Root Hash: ', rootHash);
+console.log('Root Hash: ', rootHash)
 
-const claimingAddress = leafNodes[1]
+const claimingAddress = leafNodes[6]
 const hexProof = merkleTree.getHexProof(claimingAddress)
-console.log("hexProof:", hexProof)
+console.log(hexProof)
 
 console.log(merkleTree.verify(hexProof, claimingAddress, rootHash))
