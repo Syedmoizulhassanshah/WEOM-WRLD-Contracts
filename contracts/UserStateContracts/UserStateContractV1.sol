@@ -1,173 +1,242 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.8.15;
 
-import "../utils/CustomErrors.sol";
-import "./UserStateCore.sol";
+import "hardhat/console.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
+import "../utils/CustomErrors.sol";
 
-contract UserStateContractV1 is UserStateCore {
+contract UserStateContractV1 is
+    Initializable,
+    OwnableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    UUPSUpgradeable,
+    CustomErrors
+{
     using ECDSAUpgradeable for bytes32;
+    uint256 public userCount;
+    string public baseURI;
+
+    enum AdminRoles {
+        NONE,
+        MINTER,
+        MANAGER
+    }
+
+    struct User {
+        string email;
+        address[] walletAddresses;
+        string[] stateMetadataHash;
+        uint256[] gameIDs;
+        mapping(uint256 => string) gameMetadataHash; //gameID to GameStateMetadataHash
+    }
+
+    struct FetchUsers {
+        string email;
+        address[] walletAddresses;
+        string[] stateMetadataHash;
+        string gameStateMetadataHash;
+        uint256[] gameIDs;
+    }
+
+    struct UserEncryption {
+        string email;
+        address walletAddresses;
+        string stateMetadataHash;
+        string gameStateMetadataHash;
+        uint256 gameIDs;
+    }
+
+    struct UpdateAllStatesEncryption {
+        address walletAddresses;
+        string stateMetadataHash;
+        string gameStateMetadataHash;
+        uint256 gameIDs;
+    }
+
+    struct UpdateGameStateMetadataHashEncryption {
+        string gameStateMetadataHash;
+        uint256 gameIDs;
+    }
+
+    mapping(uint256 => User) userState; // userID to User-Struct
+    mapping(address => bool) public userWalletAddressExists;
+    mapping(string => bool) public gameStateMetadataHashExists;
+    mapping(string => bool) public stateMetadataHashExists;
+    mapping(address => AdminRoles) public adminWhitelistedAddresses;
+
+    error AddressAlreadyExists();
+    error InvalidUserStateMetadataHash();
+    error InvalidGameStateMetadataHash();
+    error UserIDDoesNotExist();
+    error EmailAlreadyAssigned();
+    error GameIDDoesNotExist();
+    error CannotBeZeroAddress();
+    error UserIDCannotBeZero();
+    error CannotBeContractAddress();
+    error GameStateMetadataHashAlreadyExists();
+    error StateMetadataHashAlreadyExists();
+    error InvalidSignature();
+
+    event ConstructorInitialized(string baseURI, address initializedBy);
+    event UpdatedBaseURI(string baseURI, address addedBy);
+
+    event AddedNewUser(
+        uint256 userID,
+        string email,
+        address walletAddress,
+        string stateMetadataHash,
+        string gameStateMetadataHash,
+        uint256 gameID
+    );
+
+    event UpdatedWalletAddress(uint256 userID, address walletAddress);
+
+    event UpdatedStateMetadataHash(uint256 userID, string stateMetadataHash);
+
+    event UpdatedGameStateMetadataHash(
+        uint256 userID,
+        uint256 gameID,
+        string gameStateMetadataHash
+    );
+
+    event UpdatedAllUserStates(
+        uint256 userID,
+        address walletAddress,
+        string stateMetadataHash,
+        string gameStateMetadataHash,
+        uint256 gameID
+    );
+
+    event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
+    event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
+
+    function initialize() public initializer {
+        __Ownable_init();
+        __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
+
+        baseURI = "https://gateway.pinata.cloud/ipfs/";
+
+        emit ConstructorInitialized(baseURI, msg.sender);
+    }
 
     function _isWhitelistedAdmin(AdminRoles requiredRole) internal view {
         if (adminWhitelistedAddresses[msg.sender] != requiredRole) {
-            revert Invalid("Not whitelist address");
+            revert NotWhitelistedAddress();
         }
     }
 
     function _validationUser(
         uint256 _userID,
         address _walletAddress,
-        string memory _stateMetadataHash
+        string memory _stateMetadataHash,
+        string memory _gameStateMetadataHash
     ) internal view {
         if (_userID == 0) {
-            revert Invalid("UserId cannot be zero");
+            revert UserIDCannotBeZero();
         }
 
         if (userWalletAddressExists[_walletAddress]) {
-            revert AlreadyExists("User Wallet Address");
+            revert AddressAlreadyExists();
         }
 
         if (bytes(userState[_userID].email).length > 0) {
-            revert AlreadyExists("Email");
+            revert EmailAlreadyAssigned();
+        }
+
+        if (_walletAddress == address(0)) {
+            revert CannotBeZeroAddress();
         }
 
         if (_validationContractAddress(_walletAddress)) {
-            revert Invalid("Address cannot be contract address");
+            revert CannotBeContractAddress();
         }
 
         if (bytes(_stateMetadataHash).length != 46) {
-            revert Invalid("User state metadata hash");
+            revert InvalidUserStateMetadataHash();
+        }
+
+        if (bytes(_gameStateMetadataHash).length != 46) {
+            revert InvalidGameStateMetadataHash();
         }
 
         if (stateMetadataHashExists[_stateMetadataHash]) {
-            revert AlreadyExists("User state metadata hash");
+            revert StateMetadataHashAlreadyExists();
+        }
+
+        if (gameStateMetadataHashExists[_gameStateMetadataHash]) {
+            revert GameStateMetadataHashAlreadyExists();
         }
     }
 
-    function _validationGameStateMetadataHash(
-        uint256 _userID,
-        uint256 _gameStateIndex
-    ) internal view {
-        if (
-            bytes(userState[_userID].gameMetadataHash[_gameStateIndex])
-                .length == 0
-        ) {
-            revert NotExists("GameId");
+    function _validationGameStateMetadataHash(uint256 _userID, uint256 _gameID)
+        internal
+        view
+    {
+        if (bytes(userState[_userID].gameMetadataHash[_gameID]).length == 0) {
+            revert GameIDDoesNotExist();
         }
     }
 
     function _validationUserID(uint256 _userID) internal view {
         if (_userID == 0) {
-            revert Invalid("UserId cannot be zero");
+            revert UserIDCannotBeZero();
         }
 
         if (bytes(userState[_userID].email).length == 0) {
-            revert NotExists("UserId");
+            revert UserIDDoesNotExist();
         }
     }
 
-    function _validationAddWalletAddress(
-        uint256 _userID,
-        address _walletAddress
-    ) internal view {
+    function _validationWalletAddresses(uint256 _userID, address _walletAddress)
+        internal
+        view
+    {
         _validationUserID(_userID);
 
         if (userWalletAddressExists[_walletAddress]) {
-            revert AlreadyExists("User Wallet Address");
+            revert AddressAlreadyExists();
+        }
+        if (_walletAddress == address(0)) {
+            revert CannotBeZeroAddress();
         }
 
         if (_validationContractAddress(_walletAddress) == true) {
-            revert Invalid("Address cannot be contract address");
+            revert CannotBeContractAddress();
         }
     }
 
-    function _validationUpdateWalletAddress(
-        uint256 _userID,
-        address _walletAddress,
-        uint256 stateIndex
-    ) internal view {
-        _validationUserID(_userID);
-
-        if (userWalletAddressExists[_walletAddress]) {
-            revert AlreadyExists("User Wallet Address");
-        }
-
-        if (_validationContractAddress(_walletAddress) == true) {
-            revert Invalid("Address cannot be contract address");
-        }
-
-        if (stateIndex > userState[_userID].walletAddresses.length) {
-            revert Invalid("State index");
-        }
-    }
-
-    function _validationAddStateMetadataHash(
+    function _validationStateMetadataHash(
         uint256 _userID,
         string memory _stateMetadataHash
     ) internal view {
         _validationUserID(_userID);
 
         if (bytes(_stateMetadataHash).length != 46) {
-            revert Invalid("User state metadata hash");
+            revert InvalidUserStateMetadataHash();
         }
 
         if (stateMetadataHashExists[_stateMetadataHash]) {
-            revert AlreadyExists("User state metadata hash");
+            revert StateMetadataHashAlreadyExists();
         }
     }
 
-    function _validationUpdateStateMetadataHash(
-        uint256 _userID,
-        string memory _stateMetadataHash,
-        uint256 stateIndex
-    ) internal view {
-        _validationUserID(_userID);
-
-        if (bytes(_stateMetadataHash).length != 46) {
-            revert Invalid("User state metadata hash");
-        }
-
-        if (stateMetadataHashExists[_stateMetadataHash]) {
-            revert AlreadyExists("User state metadata hash");
-        }
-
-        if (stateIndex > userState[_userID].stateMetadataHash.length) {
-            revert Invalid("State index");
-        }
-    }
-
-    function _validationAddGameStateMetadataHash(
+    function _validationGameStateMetadataHash(
         uint256 _userID,
         string memory _gameStateMetadataHash
     ) internal view {
         _validationUserID(_userID);
 
         if (bytes(_gameStateMetadataHash).length != 46) {
-            revert Invalid("Game state metadata hash");
+            revert InvalidGameStateMetadataHash();
         }
 
         if (gameStateMetadataHashExists[_gameStateMetadataHash]) {
-            revert AlreadyExists("Game state metadata hash");
-        }
-    }
-
-    function _validationUpdateGameStateMetadataHash(
-        uint256 _userID,
-        string memory _gameStateMetadataHash,
-        uint256 stateIndex
-    ) internal view {
-        _validationUserID(_userID);
-
-        if (bytes(_gameStateMetadataHash).length != 46) {
-            revert Invalid("Game state metadata hash");
-        }
-
-        if (gameStateMetadataHashExists[_gameStateMetadataHash]) {
-            revert AlreadyExists("Game state metadata hash");
-        }
-
-        if (stateIndex > userState[_userID].gameMetadataHash.length) {
-            revert Invalid("State index");
+            revert GameStateMetadataHashAlreadyExists();
         }
     }
 
@@ -181,23 +250,6 @@ contract UserStateContractV1 is UserStateCore {
             size := extcodesize(_walletAddress)
         }
         return size > 0;
-    }
-
-    function _validationSignature(
-        bytes32 _hashedParameters,
-        bytes memory _signature
-    ) internal view {
-        if (_verifyOwnerSignature(_hashedParameters, _signature) != true) {
-            revert Invalid("Signature");
-        }
-    }
-
-    function _verifyOwnerSignature(bytes32 hash, bytes memory signature)
-        internal
-        view
-        returns (bool)
-    {
-        return hash.toEthSignedMessageHash().recover(signature) == owner();
     }
 
     /**
@@ -219,54 +271,11 @@ contract UserStateContractV1 is UserStateCore {
     }
 
     /**
-     * @dev addWhitelistAdmin is used to add whitelist admin account address.
-     *
-     * Requirement:
-     * - This function can only be called by owner of the contract
-     *
-     * @param whitelistAddress - Admin account address to be whitelisted
-     *
-     * Emits a {AddedWhitelistAdmin} event.
-     */
-
-    function addWhitelistAdmin(
-        address whitelistAddress,
-        AdminRoles allowPermission
-    ) external onlyOwner {
-        if (adminWhitelistedAddresses[whitelistAddress] != AdminRoles.NONE) {
-            revert AlreadyExists("Whitelisted address");
-        }
-        adminWhitelistedAddresses[whitelistAddress] = allowPermission;
-
-        emit AddedWhitelistAdmin(whitelistAddress, msg.sender);
-    }
-
-    /**
-     * @dev removeWhitelistAdmin is used to remove whitelist admin account address.
-     *
-     * Requirement:
-     * - This function can only be called by owner of the contract
-     *
-     * @param whitelistAddress - Admin account address to be removed
-     *
-     * Emits a {RemovedWhitelistAdmin} event.
-     */
-
-    function removeWhitelistAdmin(address whitelistAddress) external onlyOwner {
-        if (adminWhitelistedAddresses[whitelistAddress] == AdminRoles.NONE) {
-            revert Invalid("Not whitelist address");
-        }
-
-        adminWhitelistedAddresses[whitelistAddress] = AdminRoles.NONE;
-
-        emit RemovedWhitelistAdmin(whitelistAddress, msg.sender);
-    }
-
-    /**
      * @dev addUser is used to just add new users.
      * Requirement:
      * - This function can only be called by manger role.
      *
+     * @param _userID - new user's ID.
      * @param _userData - new user's data in the form of a tuple.
      * @param _signature - signature created with the manager role private key for user's data.
      *
@@ -274,312 +283,53 @@ contract UserStateContractV1 is UserStateCore {
      */
 
     function addUser(
-        UserVerification calldata _userData,
+        uint256 _userID,
+        UserEncryption calldata _userData,
         bytes calldata _signature
     ) external nonReentrant returns (uint256 _count) {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
+
+        if (
+            verifyOwnerSignature(
+                keccak256(abi.encode(_userData)),
+                _signature
+            ) != true
+        ) {
+            revert InvalidSignature();
+        }
+
         _validationUser(
-            _userData.userID,
-            _userData.walletAddress,
-            _userData.stateMetadataHash
+            _userID,
+            _userData.walletAddresses,
+            _userData.stateMetadataHash,
+            _userData.gameStateMetadataHash
         );
 
         userCount++;
-        userWalletAddressExists[_userData.walletAddress] = true;
+        userWalletAddressExists[_userData.walletAddresses] = true;
+        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
         stateMetadataHashExists[_userData.stateMetadataHash] = true;
 
-        userState[_userData.userID].email = _userData.email;
-        userState[_userData.userID].walletAddresses.push(
-            _userData.walletAddress
-        );
-        userState[_userData.userID].stateMetadataHash.push(
-            _userData.stateMetadataHash
-        );
+        userState[_userID].email = _userData.email;
+        userState[_userID].walletAddresses.push(_userData.walletAddresses);
+        userState[_userID].stateMetadataHash.push(_userData.stateMetadataHash);
+        userState[_userID].gameIDs.push(_userData.gameIDs);
+        userState[_userID].gameMetadataHash[_userData.gameIDs] = _userData
+            .gameStateMetadataHash;
 
         emit AddedNewUser(
-            _userData.userID,
-            _userData.walletAddress,
+            _userID,
             _userData.email,
-            _userData.stateMetadataHash,
-            msg.sender
-        );
-
-        return _userData.userID;
-    }
-
-    /**
-     * @dev addUserNewWalletAddress is used to add new walletAddress of an existing user againt their userID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData - existing user's ID.
-     * @param _signature - signature created with the manager role private key for user's new wallet-address.
-     *
-     * Emits a {AddedWalletAddress} event.
-     */
-
-    function addUserNewWalletAddress(
-        AddUserWalletVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationAddWalletAddress(_userData.userID, _userData.walletAddress);
-
-        userState[_userData.userID].walletAddresses.push(
-            _userData.walletAddress
-        );
-        userWalletAddressExists[_userData.walletAddress] = true;
-
-        emit AddedWalletAddress(
-            _userData.userID,
-            _userData.walletAddress,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev updateWalletAddress is used to update walletAddress of an existing user againt their userID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData - new wallet-address which you want to update.
-     * @param _signature - signature created with the manager role private key for user's new wallet-address.
-     *
-     * Emits a {UpdatedWalletAddress} event.
-     */
-
-    function updateWalletAddress(
-        UpdateUserWalletVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationUpdateWalletAddress(
-            _userData.userID,
-            _userData.walletAddress,
-            _userData.stateIndex
-        );
-
-        userState[_userData.userID].walletAddresses[
-            _userData.stateIndex
-        ] = _userData.walletAddress;
-        userWalletAddressExists[_userData.walletAddress] = true;
-
-        emit UpdatedWalletAddress(
-            _userData.userID,
-            _userData.walletAddress,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev addStateMetadataHash is used to add new state metadata hash of an existing user against their userID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData - new state metadata hash which you want to update.
-     * @param _signature - signature created with the manager role private key for user's new state metadata hash.
-     *
-     * Emits a {AddedStateMetadataHash} event.
-     */
-
-    function addStateMetadataHash(
-        AddUserMetadataVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationAddStateMetadataHash(
-            _userData.userID,
-            _userData.stateMetadataHash
-        );
-
-        stateMetadataHashExists[_userData.stateMetadataHash] = true;
-        userState[_userData.userID].stateMetadataHash.push(
-            _userData.stateMetadataHash
-        );
-
-        emit AddedStateMetadataHash(
-            _userData.userID,
-            _userData.stateMetadataHash,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev updateStateMetadataHash is used to update state metadata hash of an existing user againt their userID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData - new state metadata hash which you want to update.
-     * @param _signature - signature created with the manager role private key for user's new state metadata hash.
-     *
-     * Emits a {UpdatedStateMetadataHash} event.
-     */
-
-    function updateStateMetadataHash(
-        UpdateUserMetadataVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationUpdateStateMetadataHash(
-            _userData.userID,
-            _userData.stateMetadataHash,
-            _userData.stateIndex
-        );
-        stateMetadataHashExists[_userData.stateMetadataHash] = true;
-        userState[_userData.userID].stateMetadataHash[
-            _userData.stateIndex
-        ] = _userData.stateMetadataHash;
-
-        emit UpdatedStateMetadataHash(
-            _userData.userID,
-            _userData.stateMetadataHash,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev addNewGameState is used to update game-state metadata hash of an existing user against their userID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData -  tuple which contains new game-state metadata hash and the gameID aginst which you want to update that hash.
-     * @param _signature - signature created with the manager role private key for user's new game-state metadata hash.
-     *
-     * Emits a {AddedGameStateMetadataHash} event.
-     */
-
-    function addNewGameState(
-        AddGameStateVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationAddGameStateMetadataHash(
-            _userData.userID,
-            _userData.gameStateMetadataHash
-        );
-
-        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
-
-        userState[_userData.userID].gameIDs.push(_userData.gameID);
-        userState[_userData.userID].gameMetadataHash.push(
-            _userData.gameStateMetadataHash
-        );
-
-        emit AddedGameStateMetadataHash(
-            _userData.userID,
-            _userData.gameID,
-            _userData.gameStateMetadataHash,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev updateGameStateMetadataHash is used to update game-state metadata hash of an existing user againt their userID and gameID.
-     *
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData -  tuple which contains new game-state metadata hash and the gameID aginst which you want to update that hash.
-     * @param _signature - signature created with the manager role private key for user's new game-state metadata hash.
-     *
-     * Emits a {UpdatedGameStateMetadataHash} event.
-     */
-
-    function updateGameStateMetadataHash(
-        UpdateGameStateVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationUpdateGameStateMetadataHash(
-            _userData.userID,
-            _userData.gameStateMetadataHash,
-            _userData.gameStateIndex
-        );
-
-        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
-        userState[_userData.userID].gameMetadataHash[
-            _userData.gameStateIndex
-        ] = _userData.gameStateMetadataHash;
-
-        emit UpdatedGameStateMetadataHash(
-            _userData.userID,
-            userState[_userData.userID].gameIDs[_userData.gameStateIndex],
-            _userData.gameStateMetadataHash,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev updateAllStates is used to update all states of the existing user against their userID.
-     * Requirement:
-     * - This function can only be called by manger role.
-     *
-     * @param _userData - update user's data in the form of a tuple.
-     * @param _signature - signature created with the manager role private key for update user's data.
-     *
-     * Emits a {UpdatedAllUserStates} event.
-     */
-
-    function updateAllStates(
-        UpdateAllStatesVerification calldata _userData,
-        bytes calldata _signature
-    ) public nonReentrant {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-        _validationSignature(keccak256(abi.encode(_userData)), _signature);
-        _validationUpdateWalletAddress(
-            _userData.userID,
-            _userData.walletAddress,
-            _userData.stateIndex
-        );
-        _validationUpdateStateMetadataHash(
-            _userData.userID,
-            _userData.stateMetadataHash,
-            _userData.stateIndex
-        );
-        _validationUpdateGameStateMetadataHash(
-            _userData.userID,
-            _userData.gameStateMetadataHash,
-            _userData.gameStateIndex
-        );
-
-        userState[_userData.userID].walletAddresses[
-            _userData.walletIndex
-        ] = _userData.walletAddress;
-        userWalletAddressExists[_userData.walletAddress] = true;
-        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
-        stateMetadataHashExists[_userData.stateMetadataHash] = true;
-
-        userState[_userData.userID].stateMetadataHash[
-            _userData.stateIndex
-        ] = _userData.stateMetadataHash;
-
-        userState[_userData.userID].gameMetadataHash[
-            _userData.gameStateIndex
-        ] = _userData.gameStateMetadataHash;
-
-        emit UpdatedAllUserStates(
-            _userData.userID,
-            _userData.walletAddress,
+            _userData.walletAddresses,
             _userData.stateMetadataHash,
             _userData.gameStateMetadataHash,
-            msg.sender
+            _userData.gameIDs
         );
+        return _userID;
     }
 
     /**
-     * @dev getUserStateMetadataHashByUserID is used to get User state metadata hash info of a user by their userID.
+     * @dev getUserStateMetadataHashByUserID is used to get user state metadata hash info of a user by their userID.
      *
      * Requirement:
      * - This function can be called by anyone.
@@ -597,7 +347,7 @@ contract UserStateContractV1 is UserStateCore {
     }
 
     /**
-     * @dev getGameStateMetadataHashByUserID is used to get Game state metadata hash info of a user by their userID.
+     * @dev getGameStateMetadataHashByUserID is used to get game state metadata hash info of a user by their userID.
      *
      * Requirement:
      * - This function can be called by anyone.
@@ -609,19 +359,12 @@ contract UserStateContractV1 is UserStateCore {
     function getGameStateMetadataHashByUserID(uint256 _userID, uint256 _gameID)
         external
         view
-        returns (string memory gameStateHash)
+        returns (string memory)
     {
         _validationUserID(_userID);
+        _validationGameStateMetadataHash(_userID, _gameID);
 
-        uint256 totalGameIDs = userState[_userID].gameIDs.length;
-
-        for (uint256 i = 0; i < totalGameIDs; i++) {
-            if (userState[_userID].gameIDs[i] == _gameID) {
-                _validationGameStateMetadataHash(_userID, i);
-
-                return userState[_userID].gameMetadataHash[i];
-            }
-        }
+        return userState[_userID].gameMetadataHash[_gameID];
     }
 
     /**
@@ -661,7 +404,7 @@ contract UserStateContractV1 is UserStateCore {
     }
 
     /**
-     * @dev getStatesByUserID is used to get all info of a user by their userID.
+     * @dev getUserInfoByUserID is used to get all info of a user by their userID.
      *
      * Requirement:
      * - This function can be called by anyone.
@@ -669,21 +412,25 @@ contract UserStateContractV1 is UserStateCore {
      * @param _userID - existing user's ID.
      */
 
-    function getStatesByUserID(uint256 _userID)
+    function getUserInfoByUserID(uint256 _userID)
         external
         view
-        returns (User memory)
+        returns (FetchUsers[] memory)
     {
         _validationUserID(_userID);
 
-        User memory userDetails;
+        FetchUsers[] memory userDetails = new FetchUsers[](1);
 
-        userDetails.email = userState[_userID].email;
-        userDetails.walletAddresses = userState[_userID].walletAddresses;
-        userDetails.stateMetadataHash = userState[_userID].stateMetadataHash;
-        userDetails.gameMetadataHash = userState[_userID].gameMetadataHash;
-        userDetails.gameIDs = userState[_userID].gameIDs;
-
+        for (uint256 i = 1; i <= 1; i++) {
+            userDetails[i - 1].email = userState[_userID].email;
+            userDetails[i - 1].walletAddresses = userState[_userID]
+                .walletAddresses;
+            userDetails[i - 1].stateMetadataHash = userState[_userID]
+                .stateMetadataHash;
+            userDetails[i - 1].gameStateMetadataHash = userState[_userID]
+                .gameMetadataHash[i];
+            userDetails[i - 1].gameIDs = userState[_userID].gameIDs;
+        }
         return userDetails;
     }
 
@@ -695,17 +442,266 @@ contract UserStateContractV1 is UserStateCore {
      *
      */
 
-    function getAllUsers() external view returns (User[] memory) {
-        User[] memory userDetails = new User[](userCount);
+    function getAllUsers() external view returns (FetchUsers[] memory) {
+        FetchUsers[] memory userDetails = new FetchUsers[](userCount);
 
         for (uint256 i = 1; i <= userCount; i++) {
             userDetails[i - 1].email = userState[i].email;
             userDetails[i - 1].walletAddresses = userState[i].walletAddresses;
             userDetails[i - 1].stateMetadataHash = userState[i]
                 .stateMetadataHash;
-            userDetails[i - 1].gameMetadataHash = userState[i].gameMetadataHash;
+            userDetails[i - 1].gameStateMetadataHash = userState[i]
+                .gameMetadataHash[i];
             userDetails[i - 1].gameIDs = userState[i].gameIDs;
         }
         return userDetails;
     }
+
+    /**
+     * @dev updateWalletAddress is used to update walletAddress of an existing user againt their userID.
+     *
+     * Requirement:
+     * - This function can only be called by manger role.
+     *
+     * @param _userID - existing user's ID.
+     * @param _walletAddress - new wallet-address which you want to update.
+     * @param _signature - signature created with the manager role private key for user's new wallet-address.
+     *
+     * Emits a {UpdatedWalletAddress} event.
+     */
+
+    function updateWalletAddress(
+        uint256 _userID,
+        address _walletAddress,
+        bytes calldata _signature
+    ) public nonReentrant {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (
+            verifyOwnerSignature(
+                keccak256(abi.encode(_walletAddress)),
+                _signature
+            ) != true
+        ) {
+            revert InvalidSignature();
+        }
+
+        _validationWalletAddresses(_userID, _walletAddress);
+
+        userState[_userID].walletAddresses.push(_walletAddress);
+        userWalletAddressExists[_walletAddress] = true;
+
+        emit UpdatedWalletAddress(_userID, _walletAddress);
+    }
+
+    /**
+     * @dev updateStateMetadataHash is used to update state metadata hash of an existing user againt their userID.
+     *
+     * Requirement:
+     * - This function can only be called by manger role.
+     *
+     * @param _userID - existing user's ID.
+     * @param _stateMetadataHash - new state metadata hash which you want to update.
+     * @param _signature - signature created with the manager role private key for user's new state metadata hash.
+     *
+     * Emits a {UpdatedStateMetadataHash} event.
+     */
+
+    function updateStateMetadataHash(
+        uint256 _userID,
+        string memory _stateMetadataHash,
+        bytes calldata _signature
+    ) public nonReentrant {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (
+            verifyOwnerSignature(
+                keccak256(abi.encode(_stateMetadataHash)),
+                _signature
+            ) != true
+        ) {
+            revert InvalidSignature();
+        }
+
+        _validationStateMetadataHash(_userID, _stateMetadataHash);
+
+        stateMetadataHashExists[_stateMetadataHash] = true;
+
+        userState[_userID].stateMetadataHash.push(_stateMetadataHash);
+
+        emit UpdatedStateMetadataHash(_userID, _stateMetadataHash);
+    }
+
+    /**
+     * @dev updateGameStateMetadataHash is used to update game-state metadata hash of an existing user againt their userID.
+     *
+     * Requirement:
+     * - This function can only be called by manger role.
+     *
+     * @param _userID - existing user's ID.
+     * @param _userData -  tuple which contains new game-state metadata hash and the gameID aginst which you want to update that hash.
+     * @param _signature - signature created with the manager role private key for user's new game-state metadata hash.
+     *
+     * Emits a {UpdatedGameStateMetadataHash} event.
+     */
+
+    function updateGameStateMetadataHash(
+        uint256 _userID,
+        UpdateGameStateMetadataHashEncryption calldata _userData,
+        bytes calldata _signature
+    ) public nonReentrant {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (
+            verifyOwnerSignature(
+                keccak256(abi.encode(_userData)),
+                _signature
+            ) != true
+        ) {
+            revert InvalidSignature();
+        }
+
+        _validationGameStateMetadataHash(
+            _userID,
+            _userData.gameStateMetadataHash
+        );
+
+        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
+
+        if (
+            bytes(userState[_userID].gameMetadataHash[_userData.gameIDs])
+                .length == 0
+        ) {
+            userState[_userID].gameIDs.push(_userData.gameIDs);
+            userState[_userID].gameMetadataHash[_userData.gameIDs] = _userData
+                .gameStateMetadataHash;
+        } else {
+            userState[_userID].gameMetadataHash[_userData.gameIDs] = _userData
+                .gameStateMetadataHash;
+        }
+
+        emit UpdatedGameStateMetadataHash(
+            _userID,
+            _userData.gameIDs,
+            _userData.gameStateMetadataHash
+        );
+    }
+
+    /**
+     * @dev updateAllStates is used to update all states of the existing user against their userID.
+     * Requirement:
+     * - This function can only be called by manger role.
+     *
+     * @param _userID - existing user's ID.
+     * @param _userData - update user's data in the form of a tuple.
+     * @param _signature - signature created with the manager role private key for update user's data.
+     *
+     * Emits a {UpdatedAllUserStates} event.
+     */
+
+    function updateAllStates(
+        uint256 _userID,
+        UpdateAllStatesEncryption calldata _userData,
+        bytes calldata _signature
+    ) public nonReentrant {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (
+            verifyOwnerSignature(
+                keccak256(abi.encode(_userData)),
+                _signature
+            ) != true
+        ) {
+            revert InvalidSignature();
+        }
+
+        _validationWalletAddresses(_userID, _userData.walletAddresses);
+        _validationStateMetadataHash(_userID, _userData.stateMetadataHash);
+        _validationGameStateMetadataHash(
+            _userID,
+            _userData.gameStateMetadataHash
+        );
+
+        userState[_userID].walletAddresses.push(_userData.walletAddresses);
+        userWalletAddressExists[_userData.walletAddresses] = true;
+        gameStateMetadataHashExists[_userData.gameStateMetadataHash] = true;
+        stateMetadataHashExists[_userData.stateMetadataHash] = true;
+
+        userState[_userID].stateMetadataHash.push(_userData.stateMetadataHash);
+
+        if (
+            bytes(userState[_userID].gameMetadataHash[_userData.gameIDs])
+                .length == 0
+        ) {
+            userState[_userID].gameIDs.push(_userData.gameIDs);
+            userState[_userID].gameMetadataHash[_userData.gameIDs] = _userData
+                .gameStateMetadataHash;
+        } else {
+            userState[_userID].gameMetadataHash[_userData.gameIDs] = _userData
+                .gameStateMetadataHash;
+        }
+
+        emit UpdatedAllUserStates(
+            _userID,
+            _userData.walletAddresses,
+            _userData.stateMetadataHash,
+            _userData.gameStateMetadataHash,
+            _userData.gameIDs
+        );
+    }
+
+    /**
+     * @dev addWhitelistAdmin is used to add whitelist admin account address.
+     *
+     * Requirement:
+     * - This function can only be called by owner of the contract
+     *
+     * @param whitelistAddress - Admin account address to be whitelisted
+     *
+     * Emits a {AddedWhitelistAdmin} event.
+     */
+
+    function addWhitelistAdmin(
+        address whitelistAddress,
+        AdminRoles allowPermission
+    ) external onlyOwner {
+        if (adminWhitelistedAddresses[whitelistAddress] != AdminRoles.NONE) {
+            revert AlreadyWhitelisted();
+        }
+        adminWhitelistedAddresses[whitelistAddress] = allowPermission;
+
+        emit AddedWhitelistAdmin(whitelistAddress, msg.sender);
+    }
+
+    /**
+     * @dev removeWhitelistAdmin is used to remove whitelist admin account address.
+     *
+     * Requirement:
+     * - This function can only be called by owner of the contract
+     *
+     * @param whitelistAddress - Admin account address to be removed
+     *
+     * Emits a {RemovedWhitelistAdmin} event.
+     */
+
+    function removeWhitelistAdmin(address whitelistAddress) external onlyOwner {
+        if (adminWhitelistedAddresses[whitelistAddress] == AdminRoles.NONE) {
+            revert NotWhitelistedAddress();
+        }
+
+        adminWhitelistedAddresses[whitelistAddress] = AdminRoles.NONE;
+
+        emit RemovedWhitelistAdmin(whitelistAddress, msg.sender);
+    }
+
+    function verifyOwnerSignature(bytes32 hash, bytes memory signature)
+        internal
+        view
+        returns (bool)
+    {
+        return hash.toEthSignedMessageHash().recover(signature) == owner();
+    }
+
+    ///@dev required by the OZ UUPS module
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

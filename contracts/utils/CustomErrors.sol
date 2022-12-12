@@ -1,29 +1,24 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.8.17;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
 
-error CannotMint(string error);
-error AddressAlreadyExists();
-error AddressNotExists();
-error AccessForbidden();
-error MintingStatusPaused();
-error AlreadySameStatus();
-error AlreadyExists(string error);
-error AddressMismatched();
-error UserMintingLimitExceeds();
-error NotExists();
-error GameIdNotExists();
-error UserIdNotExists();
-error InvalidParameters(string error);
-error AlreadyDeactivated();
-error AlreadyActivated();
-error NotPremiumGreenlistUser();
-error NotNormalGreenlistUser();
-error TransferDisabled();
-error LandIdExceedLimit();
-error PhaseIDNotExists();
-error PhaseIDCannotZero();
-error PassIDCannotZero();
-error PhaseIDAlreadyExist();
-error PassAlreadyUsed();
-error NoAccessPassExists();
-error InvalidMetadataHash();
+import "hardhat/console.sol";
+
+contract CustomErrors {
+    error EmptyURL();
+    error InvalidMetadataHash();
+    error AlreadyWhitelisted();
+    error NotWhitelistedAddress();
+    error InvalidBaseURI();
+    error MintingLimitReached();
+    error PlatformMintingLimitReached();
+    error MaxMintingLimitReached();
+    error UsersMintingLimitReached();
+    error PublicSaleNotActive();
+    error PublicSaleActivated();
+    error MintingStatusPaused();
+    error AddressIsAlreadyRemoved();
+    error IdNotExist();
+    error AddressNotExist();
+    error AddressIsAlreadyWhitelisted();
+    error IdAlreadyExist();
+}
