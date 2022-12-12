@@ -1,96 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import "hardhat/console.sol";
+import "./ObjectContractCore.sol";
 
-import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "../utils/CustomErrors.sol";
-
-contract ObjectContract is
-    Initializable,
-    ERC721Upgradeable,
-    CustomErrors,
-    ERC721EnumerableUpgradeable,
-    PausableUpgradeable,
-    OwnableUpgradeable,
-    UUPSUpgradeable
-{
-    string public baseURI;
-    bool public isPublicSaleActive;
-    bool public isMintingEnable;
-
-    struct Objects {
-        string name;
-        string objectType;
-        string twoDimensional;
-        string threeDimensional;
-        string metadataHash;
-    }
-
-    enum AdminRoles {
-        NONE,
-        MINTER,
-        MANAGER
-    }
-
-    mapping(uint256 => Objects) public object;
-    mapping(address => AdminRoles) public adminWhitelistedAddresses;
-
-    event UpdatedBaseURI(string baseURI, address addedBy);
-    event ObjectMinted(uint256 objectId, address mintedBy, string metadataHash);
-    event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
-    event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
-    event MintingStatusUpdated(bool status, address updatedBy);
-    event ConstructorInitialized(string baseURI, address updatedBy);
-
-    function initialize() public initializer {
-        __ERC721_init("ObjectContract", "W-Objects");
-        __Pausable_init();
-        __Ownable_init();
-        __UUPSUpgradeable_init();
-        baseURI = "https://gateway.pinata.cloud/ipfs/";
-
-        emit ConstructorInitialized(baseURI, msg.sender);
-    }
-
-    function _isWhitelistedAdmin(AdminRoles requiredRole) internal view {
-        if (adminWhitelistedAddresses[msg.sender] != requiredRole) {
-            revert NotWhitelistedAddress();
-        }
-    }
-
-    function _verifyMetadataHash(string memory metadataHash) internal pure {
-        if (bytes(metadataHash).length != 46) {
-            revert InvalidMetadataHash();
-        }
-    }
-
-    /**
-     * @dev _storeObjectsInformation is used to store the object information.
-     * Requirement:
-     * - This is an internal function
-     */
-
-    function _storeObjectsInformation(
-        uint256 objectId,
-        string memory name,
-        string memory objectType,
-        string memory twoDimensional,
-        string memory threeDimensional,
-        string memory metadataHash
-    ) internal {
-        object[objectId].metadataHash = metadataHash;
-        object[objectId].name = name;
-        object[objectId].objectType = objectType;
-        object[objectId].twoDimensional = twoDimensional;
-        object[objectId].threeDimensional = threeDimensional;
-    }
-
+contract ObjectContractV1 is ObjectContractCore {
     /**
      * @dev updateContractPauseStatus is used to pause/unpause contract status.
      * Requirement:
@@ -99,7 +12,7 @@ contract ObjectContract is
      * @param status - bool true/false
      */
 
-    function updateContractPauseStatus(bool status) public returns (bool) {
+    function updateContractPauseStatus(bool status) external returns (bool) {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
 
         if (status) {
@@ -118,7 +31,7 @@ contract ObjectContract is
      *
      * @param _status - status bool
      *
-     * Emits a {MintingStatusUpdated} event.
+     * Emits a {UpdatedObjectMintStatus} event.
      */
 
     function updateMintingStatus(bool _status) external {
@@ -126,11 +39,11 @@ contract ObjectContract is
 
         isMintingEnable = _status;
 
-        emit MintingStatusUpdated(_status, msg.sender);
+        emit UpdatedObjectMintStatus(_status, msg.sender);
     }
 
     /**
-     * @dev updateBaseURI is used to set BaseURI.
+     * @dev updateBaseURI is used to update BaseURI.
      * Requirement:
      * - This function can only called by manager role
      *
@@ -141,6 +54,10 @@ contract ObjectContract is
 
     function updateBaseURI(string memory _baseURI) external {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (bytes(_baseURI).length == 0) {
+            revert InvalidParameters("BaseURI zero");
+        }
 
         baseURI = _baseURI;
 
@@ -162,7 +79,7 @@ contract ObjectContract is
         AdminRoles allowPermission
     ) external onlyOwner {
         if (adminWhitelistedAddresses[whitelistAddress] != AdminRoles.NONE) {
-            revert AlreadyWhitelisted();
+            revert AddressAlreadyExists();
         }
         adminWhitelistedAddresses[whitelistAddress] = allowPermission;
 
@@ -181,7 +98,7 @@ contract ObjectContract is
 
     function removeWhitelistAdmin(address whitelistAddress) external onlyOwner {
         if (adminWhitelistedAddresses[whitelistAddress] == AdminRoles.NONE) {
-            revert NotWhitelistedAddress();
+            revert NotExists();
         }
 
         adminWhitelistedAddresses[whitelistAddress] = AdminRoles.NONE;
@@ -198,8 +115,6 @@ contract ObjectContract is
      * @param to - address to mint the object
      * @param name - name of the object
      * @param objectType - object type
-     * @param twoDimensional - twoDimensional object
-     * @param threeDimensional - threeDimensional object
      * @param metadataHash - object metadata hash
      *
      * Emits a {ObjectMinted} event.
@@ -210,29 +125,50 @@ contract ObjectContract is
         uint256 objectId,
         string memory name,
         string memory objectType,
-        string memory twoDimensional,
-        string memory threeDimensional,
         string memory metadataHash
-    ) public {
-        _isWhitelistedAdmin(AdminRoles.MINTER);
-        _verifyMetadataHash(metadataHash);
-
+    ) external {
         if (!isMintingEnable) {
             revert MintingStatusPaused();
         }
+        _validationObjectsParameters(to, name, objectType, metadataHash);
+        _isWhitelistedAdmin(AdminRoles.MINTER);
 
+        _storeObjectsInformation(objectId, name, objectType, metadataHash);
         _safeMint(to, objectId);
 
-        _storeObjectsInformation(
-            objectId,
-            name,
-            objectType,
-            twoDimensional,
-            threeDimensional,
-            metadataHash
-        );
+        emit ObjectMinted(objectId, metadataHash, to, msg.sender);
+    }
 
-        emit ObjectMinted(objectId, to, metadataHash);
+    /**
+     * @dev mintBulkObjects is used to create a new object only by whitelist admin.
+     * Requirement:
+     * - This function can only called by whitelisted admin
+     *
+     *   @param objectInfo - bulk mint land in the form of a tuple.
+     */
+
+    function mintBulkObjects(bulkMintObjects[] memory objectInfo) external {
+        if (!isMintingEnable) {
+            revert MintingStatusPaused();
+        }
+        _isWhitelistedAdmin(AdminRoles.MINTER);
+
+        for (uint256 i = 0; i < objectInfo.length; i++) {
+            _validationObjectsParameters(
+                objectInfo[i].to,
+                objectInfo[i].name,
+                objectInfo[i].objectType,
+                objectInfo[i].metadataHash
+            );
+            _storeObjectsInformation(
+                objectInfo[i].objectId,
+                objectInfo[i].name,
+                objectInfo[i].objectType,
+                objectInfo[i].metadataHash
+            );
+
+            _safeMint(objectInfo[i].to, objectInfo[i].objectId);
+        }
     }
 
     /**
@@ -245,12 +181,12 @@ contract ObjectContract is
      */
 
     function getObjectByID(uint256 objectId)
-        public
+        external
         view
         returns (Objects memory)
     {
         if (!_exists(objectId)) {
-            revert IdNotExist();
+            revert NotExists();
         }
         return object[objectId];
     }
@@ -260,31 +196,29 @@ contract ObjectContract is
      * Requirement:
      * - This function can called by anyone
      *
-     * @param _address - address to get object info
+     * @param userAddress - address to get object info
      *
      */
 
-    function getObjectByAddress(address _address)
-        public
+    function getObjectsByAddress(address userAddress)
+        external
         view
-        returns (Objects[] memory)
+        returns (ReturnObjectsInfo[] memory)
     {
-        Objects[] memory objectInfo = new Objects[](balanceOf(_address));
+        ReturnObjectsInfo[] memory objectInfo = new ReturnObjectsInfo[](
+            balanceOf(userAddress)
+        );
 
-        if (balanceOf(_address) == 0) revert AddressNotExist();
+        if (balanceOf(userAddress) == 0) revert NotExists();
 
         uint256 objectIndex;
-        for (uint256 i = 0; i < balanceOf(_address); i++) {
-            console.log(balanceOf(_address));
-            uint256 tokenId = tokenOfOwnerByIndex(_address, i);
-            console.log(tokenId);
-            objectInfo[objectIndex].name = object[tokenId].name;
-            objectInfo[objectIndex].objectType = object[tokenId].objectType;
-            objectInfo[objectIndex].twoDimensional = object[tokenId]
-                .twoDimensional;
-            objectInfo[objectIndex].threeDimensional = object[tokenId]
-                .threeDimensional;
-            objectInfo[objectIndex].metadataHash = object[tokenId].metadataHash;
+        for (uint256 i = 0; i < balanceOf(userAddress); i++) {
+            uint256 objectId = tokenOfOwnerByIndex(userAddress, i);
+            objectInfo[objectIndex].objectId = objectId;
+            objectInfo[objectIndex].name = object[objectId].name;
+            objectInfo[objectIndex].objectType = object[objectId].objectType;
+            objectInfo[objectIndex].metadataHash = object[objectId]
+                .metadataHash;
             objectIndex++;
         }
 
@@ -304,35 +238,8 @@ contract ObjectContract is
         returns (string memory)
     {
         if (!_exists(objectId)) {
-            revert IdNotExist();
+            revert NotExists();
         }
         return string(abi.encodePacked(baseURI, object[objectId].metadataHash));
     }
-
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 objectId
-    )
-        internal
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        whenNotPaused
-    {
-        super._beforeTokenTransfer(from, to, objectId);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
-    }
-
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyOwner
-    {}
 }

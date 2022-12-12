@@ -26,7 +26,7 @@ contract LandContractV2 is
         string metadataHash;
     }
 
-    mapping(uint256 => Land) public land;
+    mapping(uint => Land) public land;
     mapping(address => bool) public adminWhitelistedAddresses;
 
     error LandNotExist();
@@ -37,7 +37,7 @@ contract LandContractV2 is
     error InvalidBaseURI();
 
     event SetBaseURI(string baseURI, address addedBy);
-    event LandMinted(uint256 tokenId, address mintedBy, string metadataHash);
+    event LandMinted(uint tokenId, address mintedBy, string metadataHash);
     event RootUpdated(bytes32 updatedRoot, address updatedBy);
     event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
     event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
@@ -197,7 +197,7 @@ contract LandContractV2 is
      * @return string .
      */
 
-    function tokenURI(uint256 _tokenId)
+    function tokenURI(uint _tokenId)
         public
         view
         override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
