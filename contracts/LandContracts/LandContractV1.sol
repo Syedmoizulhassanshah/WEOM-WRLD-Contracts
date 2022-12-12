@@ -4,19 +4,15 @@ pragma solidity 0.8.15;
 import "hardhat/console.sol";
 
 import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "../utils/CustomErrors.sol";
 
 contract LandContract is
     Initializable,
     ERC721Upgradeable,
-    CustomErrors,
-    ERC721EnumerableUpgradeable,
     PausableUpgradeable,
     OwnableUpgradeable,
     UUPSUpgradeable
@@ -36,7 +32,7 @@ contract LandContract is
     uint256 public whitelistUsersMintingCount;
     uint256 public publicUsersMintingCount;
     uint256 public platformMintingCount;
-    uint256 public landMintingLimitPerAddress;
+    uint256 public nftMintingLimitPerAddress;
     bool public isPublicSaleActive;
     bool public isMintingPause;
 
@@ -52,26 +48,26 @@ contract LandContract is
         PolygonCoordinates[] polygonCoordinates;
     }
 
-    mapping(address => uint256) public landMintedCount;
+    mapping(address => uint256) public nftLimit;
     mapping(uint => Land) public land;
     mapping(address => AdminRoles) public adminWhitelistedAddresses;
 
-    event UpdateBaseURI(string baseURI, address addedBy);
-    event LandMintedByWhitelistUser(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
-    event LandMintedByAdmin(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
-    event LandMintedByPublicUser(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
+    error LandNotExist();
+    error InvalidMetadataHash();
+    error NotAPartOfWhitelist();
+    error AddressIsAlreadyWhitelisted();
+    error NotWhitelistedAddress();
+    error InvalidBaseURI();
+    error MintingLimitReached();
+    error PlatformMintingLimitReached();
+    error MaxMintingLimitReached();
+    error UsersMintingLimitReached();
+    error PublicSaleIsNotActive();
+    error PublicSaleActiveYouCannotMint();
+    error MintingStatusPausedYouCannotMint();
+
+    event SetBaseURI(string baseURI, address addedBy);
+    event LandMinted(uint tokenId, address mintedBy, string metadataHash);
     event RootUpdated(bytes32 updatedRoot, address updatedBy);
     event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
     event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
@@ -83,7 +79,7 @@ contract LandContract is
     event UpdatedplatformMintingLimit(uint256 limit, address updatedBy);
     event UpdatedPublicMintingLimit(uint256 limit, address updatedBy);
     event UpdatedMaxMintingLimit(uint256 limit, address updatedBy);
-    event UpdatedLandMintingLimitPerAddress(
+    event updatedNftMintingLimitPerAddress(
         uint256 limitPerAddress,
         address updatedBy
     );
@@ -98,21 +94,19 @@ contract LandContract is
 
     function initialize(
         uint _maxMintingLimit,
-        uint _landMintingLimitPerAddress,
+        uint _nftMintingLimitPerAddress,
         uint _platformMintingLimit
     ) public initializer {
         __ERC721_init("LandContract", "W-Land");
         __Pausable_init();
         __Ownable_init();
         __UUPSUpgradeable_init();
-
         baseURI = "https://gateway.pinata.cloud/ipfs/";
 
         maxMintingLimit = _maxMintingLimit;
-        landMintingLimitPerAddress = _landMintingLimitPerAddress;
+        nftMintingLimitPerAddress = _nftMintingLimitPerAddress;
         platformMintingLimit = _platformMintingLimit;
         publicMintingLimit = maxMintingLimit - platformMintingLimit;
-
         _verifyPlatformLimit();
 
         emit ConstructorInitialized(
@@ -142,25 +136,19 @@ contract LandContract is
         }
     }
 
-    /**
-     * @dev _storeLandInformation is used to store the land information.
-     * Requirement:
-     * - This is an internal function
-     */
-
     function _storeLandInformation(
-        uint landId,
+        uint tokenId,
         string memory longitude,
         string memory latitude,
         string memory metadataHash,
         PolygonCoordinates[] memory coordinates
     ) internal {
-        land[landId].longitude = longitude;
-        land[landId].latitude = latitude;
-        land[landId].metadataHash = metadataHash;
+        land[tokenId].longitude = longitude;
+        land[tokenId].latitude = latitude;
+        land[tokenId].metadataHash = metadataHash;
 
         for (uint i = 0; i < coordinates.length; ) {
-            land[landId].polygonCoordinates.push(
+            land[tokenId].polygonCoordinates.push(
                 PolygonCoordinates(
                     coordinates[i].longitude,
                     coordinates[i].latitude
@@ -172,30 +160,21 @@ contract LandContract is
         }
     }
 
-    /**
-     * @dev updateContractPauseStatus is used to pause/unpause contract status.
-     * Requirement:
-     *  - This function can only called manger role
-     * @param status - bool true/false
-     */
-
-    function updateContractPauseStatus(bool status) public returns (bool) {
+    function contractPause() public {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
+        _pause();
+    }
 
-        if (status) {
-            _pause();
-        } else {
-            _unpause();
-        }
-
-        return status;
+    function contractUnPause() public {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+        _unpause();
     }
 
     /**
-     * @dev updateMintingStatus is used to update mintng status.
+     * @dev updateMintingStatus is used to update miintng status.
      * Requirement:
-     * - This function can only called manger role
-     * @param _status - status bool
+     * - This function can only called by owner of the Contract
+     * @param _status - status of drone Id
      * Emits a {MintingStatusUpdated} event.
      */
 
@@ -208,37 +187,16 @@ contract LandContract is
     }
 
     /**
-     * @dev updateLandMintingLimitPerAddress is used to update Nft minting limit per address.
-     * Requirement:
-     * - This function can only called manger role
-     * @param _landMintingLimitPerAddress - new limit
-     * Emits a {MintingStatusUpdated} event.
-     */
-
-    function updateLandMintingLimitPerAddress(
-        uint256 _landMintingLimitPerAddress
-    ) external {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-
-        landMintingLimitPerAddress = _landMintingLimitPerAddress;
-
-        emit UpdatedLandMintingLimitPerAddress(
-            _landMintingLimitPerAddress,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev updateBaseURI is used to set BaseURI.
+     * @dev setBaseURI is used to set BaseURI.
      * Requirement:
      * - This function can only called by owner of contract
      *
      * @param _baseURI - New baseURI
      *
-     * Emits a {UpdateBaseURI} event.
+     * Emits a {SetBaseURI} event.
      */
 
-    function updateBaseURI(string memory _baseURI) external {
+    function setBaseURI(string memory _baseURI) external {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
 
         if (bytes(_baseURI).length != 34) {
@@ -247,11 +205,69 @@ contract LandContract is
 
         baseURI = _baseURI;
 
-        emit UpdateBaseURI(baseURI, msg.sender);
+        emit SetBaseURI(baseURI, msg.sender);
     }
 
     /**
-     * @dev updateWhitelistUsers is used to update whitelistUsersMintingLimit and whitelistedRoot.
+     * @dev updateMaxMintingLimit is used to update minting limit.
+     * Requirement:
+     * - This function can only called by owner of contract
+     *
+     * @param _maxMintingLimit - New _maxMintingLimit
+     *
+     * Emits a {UpdatedMaxMintingLimit} event.
+     */
+
+    function updateMaxMintingLimit(uint _maxMintingLimit) external {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+        maxMintingLimit += _maxMintingLimit;
+
+        emit UpdatedMaxMintingLimit(maxMintingLimit, msg.sender);
+    }
+
+    /**
+     * @dev updatePlatformMintingLimit is used to update platform minting limit.
+     * Requirement:
+     * - This function can only called by owner of contract
+     *
+     * @param _platformMintingLimit - New _platformMintingLimit
+     *
+     * Emits a {UpdatedplatformMintingLimit} event.
+     */
+
+    function updatePlatformMintingLimit(uint _platformMintingLimit) external {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        platformMintingLimit += _platformMintingLimit;
+        publicMintingLimit = maxMintingLimit - platformMintingLimit;
+
+        emit UpdatedplatformMintingLimit(_platformMintingLimit, msg.sender);
+    }
+
+    /**
+     * @dev updatePublicMintingLimit is used to update public minting limit.
+     * Requirement:
+     * - This function can only called by owner of contract
+     *
+     * @param _publicMintingLimit - New _publicMintingLimit
+     *
+     * Emits a {UpdatedPublicMintingLimit} event.
+     */
+
+    function updatePublicMintingLimit(uint _publicMintingLimit) external {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+
+        if (_publicMintingLimit >= maxMintingLimit) {
+            revert MaxMintingLimitReached();
+        }
+
+        publicMintingLimit += _publicMintingLimit;
+
+        emit UpdatedPublicMintingLimit(_publicMintingLimit, msg.sender);
+    }
+
+    /**
+     * @dev updateWhitelistUsersMintingLimit is used to update whitelistUsersMintingLimit and whitelistedRoot.
      * Requirement:
      * - This function can only called by owner of contract
      *
@@ -261,7 +277,7 @@ contract LandContract is
      * Emits a {UpdatedWhitelistUsersMintingLimit} event.
      */
 
-    function updateWhitelistUsers(
+    function updateWhitelistUsersMintingLimit(
         uint _whitelistUsersMintingLimit,
         bytes32 _whitelistedRoot
     ) external {
@@ -274,7 +290,7 @@ contract LandContract is
 
         whitelistUsersMintingLimit =
             _whitelistUsersMintingLimit *
-            landMintingLimitPerAddress;
+            nftMintingLimitPerAddress;
 
         publicMintingLimit = publicMintingLimit - whitelistUsersMintingLimit;
 
@@ -294,7 +310,7 @@ contract LandContract is
     }
 
     /**
-     * @dev addWhitelistAdmin is used to add whitelist admin account.
+     * @dev addWhitelistAdmin is used to add whitelsit admin account.
      * Requirement:
      * - This function can only called by owner of the contract
      *
@@ -308,7 +324,7 @@ contract LandContract is
         AdminRoles allowPermission
     ) external onlyOwner {
         if (adminWhitelistedAddresses[whitelistAddress] != AdminRoles.NONE) {
-            revert AlreadyWhitelisted();
+            revert AddressIsAlreadyWhitelisted();
         }
         adminWhitelistedAddresses[whitelistAddress] = allowPermission;
 
@@ -316,7 +332,7 @@ contract LandContract is
     }
 
     /**
-     * @dev removeWhitelistAdmin is used to remove whitelist admin account.
+     * @dev removeWhitelistAdmin is used to remove whitelsit admin account.
      * Requirement:
      * - This function can only called by owner of the contract
      *
@@ -336,24 +352,46 @@ contract LandContract is
     }
 
     /**
+     * @dev updateNftMintingLimitPerAddress is used to update nft minting limit per address.
+     * Requirement:
+     * - This function can only called by owner of the contract
+     *
+     * @param _nftMintingLimitPerAddress - New limit nftMintingLimitPerAddress
+     *
+     * Emits a {updatedNftMintingLimitPerAddress} event.
+     */
+
+    function updateNftMintingLimitPerAddress(uint256 _nftMintingLimitPerAddress)
+        external
+    {
+        _isWhitelistedAdmin(AdminRoles.MANAGER);
+        nftMintingLimitPerAddress = _nftMintingLimitPerAddress;
+
+        emit updatedNftMintingLimitPerAddress(
+            nftMintingLimitPerAddress,
+            msg.sender
+        );
+    }
+
+    /**
      * @dev mintLandWhitelistUsers is used to create a new land for white list users.
      * Requirement:
      * - This function can only called by whitelisted users
      *
-     * @param landId - landId
-     * @param to - address to mint land
+     * @param tokenId - land Id
+     * @param to - address to mint the land
      * @param metadataHash - land metadata hash
      * @param longitude - longitude
      * @param latitude - latitud
      * @param coordinates - polygonCoordinates
      * @param proof - proof of whitelist users
      *
-     * Emits a {LandMintedByWhitelistUser} event.
+     * Emits a {LandMinted} event.
      */
 
     function mintLandWhitelistUsers(
         address to,
-        uint256 landId,
+        uint256 tokenId,
         string memory longitude,
         string memory latitude,
         PolygonCoordinates[] memory coordinates,
@@ -362,13 +400,13 @@ contract LandContract is
     ) public {
         _verifyMetadataHash(metadataHash);
 
-        if (isPublicSaleActive) {
-            revert PublicSaleActivated();
+        if (isPublicSaleActive == true) {
+            revert PublicSaleActiveYouCannotMint();
         }
         if (!isValid(proof, keccak256(abi.encodePacked(msg.sender)))) {
-            revert NotWhitelistedAddress();
+            revert NotAPartOfWhitelist();
         }
-        if (landMintedCount[msg.sender] >= landMintingLimitPerAddress) {
+        if (nftLimit[msg.sender] >= nftMintingLimitPerAddress) {
             revert MintingLimitReached();
         }
         if (whitelistUsersMintingCount >= whitelistUsersMintingLimit) {
@@ -376,39 +414,39 @@ contract LandContract is
         }
         whitelistUsersMintingCount++;
 
-        landMintedCount[msg.sender]++;
+        nftLimit[msg.sender] += 1;
+
+        _safeMint(to, tokenId);
 
         _storeLandInformation(
-            landId,
+            tokenId,
             longitude,
             latitude,
             metadataHash,
             coordinates
         );
 
-        _safeMint(to, landId);
-
-        emit LandMintedByWhitelistUser(landId, to, metadataHash);
+        emit LandMinted(tokenId, to, metadataHash);
     }
 
     /**
      * @dev mintLandWhitelistAdmin is used to create a new land only by whitelist admin.
      * Requirement:
-     * - This function can only called by whitelisted admin with minter role
+     * - This function can only called by whitelisted admin
      *
-     * @param landId - landId
+     *  * @param tokenId - land Id
      * @param to - address to mint the land
      * @param metadataHash - land metadata hash
      * @param longitude - longitude
      * @param latitude - latitud
      * @param coordinates - polygonCoordinates
      *
-     * Emits a {LandMintedByAdmin} event.
+     * Emits a {LandMinted} event.
      */
 
     function mintLandWhitelistAdmin(
         address to,
-        uint256 landId,
+        uint256 tokenId,
         string memory longitude,
         string memory latitude,
         PolygonCoordinates[] memory coordinates,
@@ -417,35 +455,35 @@ contract LandContract is
         _isWhitelistedAdmin(AdminRoles.MINTER);
         _verifyMetadataHash(metadataHash);
 
-        if (!isMintingPause) {
-            revert MintingStatusPaused();
+        if (isMintingPause != true) {
+            revert MintingStatusPausedYouCannotMint();
         }
 
         if (platformMintingCount >= platformMintingLimit) {
             revert PlatformMintingLimitReached();
         }
 
-        platformMintingCount++;
+        _safeMint(to, tokenId);
 
         _storeLandInformation(
-            landId,
+            tokenId,
             longitude,
             latitude,
             metadataHash,
             coordinates
         );
 
-        _safeMint(to, landId);
+        platformMintingCount++;
 
-        emit LandMintedByAdmin(landId, to, metadataHash);
+        emit LandMinted(tokenId, to, metadataHash);
     }
 
     /**
      * @dev mintLandPublic is used to create a new land for public.
      * Requirement:
-     * - This function is for public minting.It can be accessible when minting is enabled and public sale status is true.
+     * - This function is for public minting.
      *
-     * @param landId - landId
+     * @param tokenId - land Id
      * @param to - address to mint the land
      * @param metadataHash - land metadata hash
      * @param longitude - longitude
@@ -453,12 +491,12 @@ contract LandContract is
      * @param coordinates - polygonCoordinates
 
      *
-     * Emits a {LandMintedByPublicUser} event.
+     * Emits a {LandMinted} event.
      */
 
     function mintLandPublic(
         address to,
-        uint256 landId,
+        uint256 tokenId,
         string memory longitude,
         string memory latitude,
         PolygonCoordinates[] memory coordinates,
@@ -466,10 +504,10 @@ contract LandContract is
     ) public {
         _verifyMetadataHash(metadataHash);
 
-        if (!isPublicSaleActive) {
-            revert PublicSaleNotActive();
+        if (isPublicSaleActive != true) {
+            revert PublicSaleIsNotActive();
         }
-        if (landMintedCount[msg.sender] >= landMintingLimitPerAddress) {
+        if (nftLimit[msg.sender] >= nftMintingLimitPerAddress) {
             revert MintingLimitReached();
         }
         if (publicUsersMintingCount >= publicMintingLimit) {
@@ -477,61 +515,22 @@ contract LandContract is
         }
 
         publicUsersMintingCount++;
-        landMintedCount[msg.sender]++;
+        nftLimit[msg.sender] += 1;
+
+        _safeMint(to, tokenId);
 
         _storeLandInformation(
-            landId,
+            tokenId,
             longitude,
             latitude,
             metadataHash,
             coordinates
         );
 
-        _safeMint(to, landId);
-
-        emit LandMintedByPublicUser(landId, to, metadataHash);
+        emit LandMinted(tokenId, to, metadataHash);
     }
 
-    /**
-     * @dev getLandsByAddress is used to get land info by wallet address.
-     * Requirement:
-     * - This function can called by anyone.
-     *
-     * @param _address - address to get land info
-     */
-
-    function getLandsByAddress(address _address)
-        public
-        view
-        returns (Land[] memory)
-    {
-        Land[] memory landInfo = new Land[](balanceOf(_address));
-
-        if (balanceOf(_address) == 0) revert AddressNotExist();
-
-        uint objectIndex = 0;
-        for (uint i = 0; i < balanceOf(_address); i++) {
-            uint256 tokenId = tokenOfOwnerByIndex(_address, i);
-            landInfo[objectIndex].metadataHash = land[tokenId].metadataHash;
-            landInfo[objectIndex].longitude = land[tokenId].longitude;
-            landInfo[objectIndex].latitude = land[tokenId].latitude;
-            landInfo[objectIndex].polygonCoordinates = land[tokenId]
-                .polygonCoordinates;
-            objectIndex++;
-        }
-
-        return landInfo;
-    }
-
-    /**
-     * @dev getLandById is used to get land info by landId.
-     * Requirement:
-     * - This function can called by anyone
-     *
-     * @param landId - landId to get land info
-     */
-
-    function getLandById(uint landId)
+    function getLandInfo(uint tokenId)
         public
         view
         returns (
@@ -541,19 +540,19 @@ contract LandContract is
             PolygonCoordinates[] memory
         )
     {
-        if (!_exists(landId)) {
-            revert IdNotExist();
+        if (!_exists(tokenId)) {
+            revert LandNotExist();
         }
 
         PolygonCoordinates[] memory coordinates = new PolygonCoordinates[](
-            land[landId].polygonCoordinates.length
+            land[tokenId].polygonCoordinates.length
         );
 
-        for (uint i = 0; i < land[landId].polygonCoordinates.length; ) {
-            coordinates[i].longitude = land[landId]
+        for (uint i = 0; i < land[tokenId].polygonCoordinates.length; ) {
+            coordinates[i].longitude = land[tokenId]
                 .polygonCoordinates[i]
                 .longitude;
-            coordinates[i].latitude = land[landId]
+            coordinates[i].latitude = land[tokenId]
                 .polygonCoordinates[i]
                 .latitude;
 
@@ -563,22 +562,22 @@ contract LandContract is
         }
 
         return (
-            land[landId].metadataHash,
-            land[landId].longitude,
-            land[landId].latitude,
+            land[tokenId].metadataHash,
+            land[tokenId].longitude,
+            land[tokenId].latitude,
             coordinates
         );
     }
 
     /**
-     * @dev updatePublicSaleStatus is used to active the public sale.
-     * Requirement:
-     * - Only Manger role can call this method.
+     * @dev updateActivePublicSale is used to active the public sale.
      *
-     * @param status - to true/false
+     * @param active - to true/falsee
+     *
+     * @return bool .
      */
 
-    function updatePublicSaleStatus(bool status) public returns (bool) {
+    function updateActivePublicSale(bool active) public returns (bool) {
         _isWhitelistedAdmin(AdminRoles.MANAGER);
 
         if (whitelistUsersMintingCount != whitelistUsersMintingLimit) {
@@ -587,39 +586,29 @@ contract LandContract is
                 whitelistUsersMintingCount;
         }
 
-        isPublicSaleActive = status;
+        isPublicSaleActive = active;
 
         return true;
     }
 
     /**
-     * @dev tokenURI is used to get tokenURI link
-     * @param landId - ID of drone
-     * @return string
+     * @dev tokenURI is used to get tokenURI link.
+     *
+     * @param _tokenId - ID of drone
+     *
+     * @return string .
      */
 
-    function tokenURI(uint landId)
+    function tokenURI(uint _tokenId)
         public
         view
-        override(ERC721Upgradeable)
+        override
         returns (string memory)
     {
-        if (!_exists(landId)) {
-            revert IdNotExist();
+        if (!_exists(_tokenId)) {
+            revert LandNotExist();
         }
-        return string(abi.encodePacked(baseURI, land[landId].metadataHash));
-    }
-
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 tokenId
-    )
-        internal
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        whenNotPaused
-    {
-        super._beforeTokenTransfer(from, to, tokenId);
+        return string(abi.encodePacked(baseURI, land[_tokenId].metadataHash));
     }
 
     function _authorizeUpgrade(address newImplementation)
@@ -627,13 +616,4 @@ contract LandContract is
         override
         onlyOwner
     {}
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
-    }
 }

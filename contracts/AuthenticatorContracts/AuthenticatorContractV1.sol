@@ -25,11 +25,6 @@ contract AuthenticatorContractV1 is
     error AddressIsAlreadyWhitelisted();
     error NotWhitelistedAddress();
 
-    event AddedWhitelistAdmins(
-        address[] whitelistedAddress,
-        AdminRoles[] permission,
-        address updatedBy
-    );
     event AddedWhitelistAdmin(
         address whitelistedAddress,
         AdminRoles permission,
@@ -53,7 +48,7 @@ contract AuthenticatorContractV1 is
     }
 
     /**
-     * @dev addWhitelistAdmin is used to add whitelsit admin account.
+     * @dev addWhitelistAdmin is used to add whitelist admin account.
      * Requirement:
      * - This function can only called by owner of the contract
      *
@@ -79,46 +74,11 @@ contract AuthenticatorContractV1 is
     }
 
     /**
-     * @dev addWhitelistAdmins is used to add whitelsit admin accounts and permissions.
+     * @dev removeWhitelistAdmin is used to remove whitelist admin account.
      * Requirement:
      * - This function can only called by owner of the contract
      *
-     * @param whitelistAddresses - Admins to be whitelisted
-     * @param allowPermissions - Assign roles to admin addresses
-     *
-     * Emits a {AddedWhitelistAdmins} event.
-     */
-
-    function addWhitelistAdmins(
-        address[] memory whitelistAddresses,
-        AdminRoles[] memory allowPermissions
-    ) external onlyOwner {
-        for (uint256 i = 0; i < whitelistAddresses.length; i++) {
-            for (uint256 j = 0; j < allowPermissions.length; j++) {
-                if (
-                    !adminWhitelistedAddresses[whitelistAddresses[i]][
-                        allowPermissions[j]
-                    ]
-                ) {
-                    adminWhitelistedAddresses[whitelistAddresses[i]][
-                        allowPermissions[j]
-                    ] = true;
-                }
-            }
-        }
-        emit AddedWhitelistAdmins(
-            whitelistAddresses,
-            allowPermissions,
-            msg.sender
-        );
-    }
-
-    /**
-     * @dev removeWhitelistAdmin is used to remove whitelsit admin account.
-     * Requirement:
-     * - This function can only called by owner of the contract
-     *
-     * @param whitelistAddress - Accounts to be removed
+     * @param whitelistAddress - Account to be removed
      * @param removePermission - revoke role from admin address
      *
      * Emits a {RemovedWhitelistAdmin} event.
@@ -144,6 +104,14 @@ contract AuthenticatorContractV1 is
         );
     }
 
+    /**
+     * @dev validateAdmin is used to validate the admin account.
+     *
+     * @param whitelistAddress - Account to validate
+     * @param accessType - Admin roles to validate
+     *
+     */
+
     function validateAdmin(address whitelistAddress, AdminRoles accessType)
         external
         view
@@ -162,7 +130,7 @@ contract AuthenticatorContractV1 is
     /**
      * @dev getAdminPermissions is used to get all permissions on address
      *
-     * @param whitelistAddress - Admin address to get permissions.
+     * @param whitelistAddress - Admin address to get permissions
      */
 
     function getAdminPermissions(address whitelistAddress)
