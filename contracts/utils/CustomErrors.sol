@@ -1,20 +1,11 @@
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-error CannotMint(string error);
-error AddressAlreadyExists();
-error AddressNotExists();
-error MintingStatusPaused();
-error AlreadySameStatus();
+error Invalid(string error);
 error AlreadyExists(string error);
 error AddressMismatched();
-error UserMintingLimitExceeds();
-error NotExists();
-error GameIdNotExists();
-error UserIdNotExists();
-error InvalidParameters(string error);
-error AlreadyDeactivated();
-error AlreadyActivated();
-error NotPremiumWhitelistUser();
-error NotNormalWhitelistUser();
-error TransferDisabled();
+error CannotMint(string error);
+error PublicSaleStatus(string error);
+error MintingStatusPaused();
+error NotExists(string error);
+
