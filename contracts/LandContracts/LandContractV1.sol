@@ -1,495 +1,546 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.15;
+pragma solidity 0.8.17;
 
-import "hardhat/console.sol";
+import "./LandContractCore.sol";
 
-import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "../utils/CustomErrors.sol";
-
-contract LandContract is
-    Initializable,
-    ERC721Upgradeable,
-    CustomErrors,
-    ERC721EnumerableUpgradeable,
-    PausableUpgradeable,
-    OwnableUpgradeable,
-    UUPSUpgradeable
-{
-    enum AdminRoles {
-        NONE,
-        MINTER,
-        MANAGER
-    }
-
-    string public baseURI;
-    bytes32 public usersWhitelistRootHash;
-    uint256 public maxMintingLimit;
-    uint256 public whitelistUsersMintingLimit;
-    uint256 public platformMintingLimit;
-    uint256 public publicMintingLimit;
-    uint256 public whitelistUsersMintingCount;
-    uint256 public publicUsersMintingCount;
-    uint256 public platformMintingCount;
-    uint256 public landMintingLimitPerAddress;
-    bool public isPublicSaleActive;
-    bool public isMintingPause;
-
-    struct PolygonCoordinates {
-        string longitude;
-        string latitude;
-    }
-
-    struct Land {
-        string longitude;
-        string latitude;
-        string metadataHash;
-        PolygonCoordinates[] polygonCoordinates;
-    }
-
-    mapping(address => uint256) public landMintedCount;
-    mapping(uint => Land) public land;
-    mapping(address => AdminRoles) public adminWhitelistedAddresses;
-
-    event UpdateBaseURI(string baseURI, address addedBy);
-    event LandMintedByWhitelistUser(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
-    event LandMintedByAdmin(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
-    event LandMintedByPublicUser(
-        uint tokenId,
-        address mintedBy,
-        string metadataHash
-    );
-    event RootUpdated(bytes32 updatedRoot, address updatedBy);
-    event AddedWhitelistAdmin(address whitelistedAddress, address updatedBy);
-    event RemovedWhitelistAdmin(address whitelistedAddress, address updatedBy);
-    event UpdatedWhitelistUsersMintingLimit(
-        uint256 limit,
-        bytes32 whitelistedRoot,
-        address updatedBy
-    );
-    event UpdatedplatformMintingLimit(uint256 limit, address updatedBy);
-    event UpdatedPublicMintingLimit(uint256 limit, address updatedBy);
-    event UpdatedMaxMintingLimit(uint256 limit, address updatedBy);
-    event UpdatedLandMintingLimitPerAddress(
-        uint256 limitPerAddress,
-        address updatedBy
-    );
-    event MintingStatusUpdated(bool status, address updatedBy);
-    event ConstructorInitialized(
-        string baseURI,
-        uint maxMintingLimit,
-        uint platformMintingLimit,
-        uint publicMintingLimit,
-        address updatedBy
-    );
-
-    function initialize(
-        uint _maxMintingLimit,
-        uint _landMintingLimitPerAddress,
-        uint _platformMintingLimit
-    ) public initializer {
-        __ERC721_init("LandContract", "W-Land");
-        __Pausable_init();
-        __Ownable_init();
-        __UUPSUpgradeable_init();
-
-        baseURI = "https://gateway.pinata.cloud/ipfs/";
-
-        maxMintingLimit = _maxMintingLimit;
-        landMintingLimitPerAddress = _landMintingLimitPerAddress;
-        platformMintingLimit = _platformMintingLimit;
-        publicMintingLimit = maxMintingLimit - platformMintingLimit;
-
-        _verifyPlatformLimit();
-
-        emit ConstructorInitialized(
-            baseURI,
-            maxMintingLimit,
-            platformMintingLimit,
-            publicMintingLimit,
-            msg.sender
-        );
-    }
-
-    function _isWhitelistedAdmin(AdminRoles requiredRole) internal view {
-        if (adminWhitelistedAddresses[msg.sender] != requiredRole) {
-            revert NotWhitelistedAddress();
-        }
-    }
-
-    function _verifyPlatformLimit() internal view {
-        if (platformMintingLimit >= maxMintingLimit) {
-            revert MaxMintingLimitReached();
-        }
-    }
-
-    function _verifyMetadataHash(string memory metadataHash) internal pure {
-        if (bytes(metadataHash).length != 46) {
-            revert InvalidMetadataHash();
-        }
-    }
-
-    /**
-     * @dev _storeLandInformation is used to store the land information.
-     * Requirement:
-     * - This is an internal function
-     */
-
-    function _storeLandInformation(
-        uint landId,
-        string memory longitude,
-        string memory latitude,
-        string memory metadataHash,
-        PolygonCoordinates[] memory coordinates
-    ) internal {
-        land[landId].longitude = longitude;
-        land[landId].latitude = latitude;
-        land[landId].metadataHash = metadataHash;
-
-        for (uint i = 0; i < coordinates.length; ) {
-            land[landId].polygonCoordinates.push(
-                PolygonCoordinates(
-                    coordinates[i].longitude,
-                    coordinates[i].latitude
-                )
-            );
-            unchecked {
-                i++;
-            }
-        }
-    }
-
-    /**
-     * @dev updateContractPauseStatus is used to pause/unpause contract status.
-     * Requirement:
-     *  - This function can only called manger role
-     * @param status - bool true/false
-     */
-
-    function updateContractPauseStatus(bool status) public returns (bool) {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-
-        if (status) {
-            _pause();
-        } else {
-            _unpause();
-        }
-
-        return status;
-    }
-
+contract LandContractV1 is LandContractCore {
     /**
      * @dev updateMintingStatus is used to update mintng status.
      * Requirement:
-     * - This function can only called manger role
-     * @param _status - status bool
-     * Emits a {MintingStatusUpdated} event.
+     *  - This function can only called by manager role
+     * @param _status - bool true/false
+     *
+     * Emits a {UpdatedLandMintStatus} event.
      */
 
     function updateMintingStatus(bool _status) external {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
+        if (isMintingEnabled == _status) {
+            revert AlreadySameStatus();
+        }
 
-        isMintingPause = _status;
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+        isMintingEnabled = _status;
 
-        emit MintingStatusUpdated(_status, msg.sender);
+        emit UpdatedLandMintStatus(_status, msg.sender);
     }
 
     /**
-     * @dev updateLandMintingLimitPerAddress is used to update Nft minting limit per address.
+     * @dev updatePremiumStatus is used to enable premium mintng.
      * Requirement:
-     * - This function can only called manger role
-     * @param _landMintingLimitPerAddress - new limit
-     * Emits a {MintingStatusUpdated} event.
+     *  - This function can only called by manager role
+     * @param _status - bool true/false
+     *
+     * Emits a {UpdatedPremiumStatus} event.
      */
 
-    function updateLandMintingLimitPerAddress(
-        uint256 _landMintingLimitPerAddress
-    ) external {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
+    function updatePremiumStatus(bool _status) external {
+        if (isPremiumEnabled == _status) {
+            revert AlreadySameStatus();
+        }
 
-        landMintingLimitPerAddress = _landMintingLimitPerAddress;
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+        isPremiumEnabled = _status;
 
-        emit UpdatedLandMintingLimitPerAddress(
-            _landMintingLimitPerAddress,
-            msg.sender
-        );
+        emit UpdatedPremiumStatus(_status, msg.sender);
     }
 
     /**
-     * @dev updateBaseURI is used to set BaseURI.
+     * @dev updateglobalUserMintingLimit is used to update the global minting.
      * Requirement:
-     * - This function can only called by owner of contract
+     *  - This function can only called by manager role
+     * @param newLimit - newLimit
+     *
+     * Emits a {UpdatedGlobalUserMintingLimit} event.
+     */
+
+    function updateglobalUserMintingLimit(uint256 newLimit) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        globalUserMintingLimit = newLimit;
+
+        emit UpdatedGlobalUserMintingLimit(newLimit, msg.sender);
+    }
+
+    /**
+     * @dev updateGreenlistUserMintingStatus is used to allow greenlist users to mint.
+     * Requirement:
+     *  - This function can only called by manager role
+     *
+     * @param status - bool true/false
+     *
+     * Emits a {UpdatedGreenlistUserMintingStatus} event.
+     */
+
+    function updateGreenlistUserMintingStatus(bool status) external {
+        if (isGreenlistUserMintingAllowed == status) {
+            revert AlreadySameStatus();
+        }
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        isGreenlistUserMintingAllowed = status;
+
+        emit UpdatedGreenlistUserMintingStatus(status, msg.sender);
+    }
+
+    /**
+     * @dev updateBaseURI is used to update BaseURI.
+     * Requirement:
+     *  - This function can only called by manager role
      *
      * @param _baseURI - New baseURI
      *
-     * Emits a {UpdateBaseURI} event.
+     * Emits a {UpdatedBaseURI} event.
      */
 
     function updateBaseURI(string memory _baseURI) external {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
 
-        if (bytes(_baseURI).length != 34) {
-            revert InvalidBaseURI();
+        if (bytes(_baseURI).length == 0) {
+            revert InvalidParameters("BaseURI empty");
         }
 
         baseURI = _baseURI;
 
-        emit UpdateBaseURI(baseURI, msg.sender);
+        emit UpdatedBaseURI(baseURI, msg.sender);
     }
 
     /**
-     * @dev updateWhitelistUsers is used to update whitelistUsersMintingLimit and whitelistedRoot.
+     * @dev addAccessPassContractAddress  is used to add Access Pass Contract Address for calling its functions via a interface.
      * Requirement:
-     * - This function can only called by owner of contract
+     * - This function can only called by owner of the land
+     * @param accessPassContractAddress - Access Pass Contract Address
      *
-     * @param _whitelistUsersMintingLimit - New whitelistUsersMintingLimit
-     * @param _whitelistedRoot - New whitelistedRoot
-     *
-     * Emits a {UpdatedWhitelistUsersMintingLimit} event.
+     * Emits a {AddedAccessPassContractAddress} event.
      */
 
-    function updateWhitelistUsers(
-        uint _whitelistUsersMintingLimit,
-        bytes32 _whitelistedRoot
-    ) external {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
+    function addAccessPassContractAddress(address accessPassContractAddress)
+        external
+        onlyOwner
+    {
+        passInterface = IAccessPass(accessPassContractAddress);
 
-        if (_whitelistUsersMintingLimit >= maxMintingLimit) {
-            revert MaxMintingLimitReached();
+        emit AddedAccessPassContractAddress(accessPassContractAddress, owner());
+    }
+
+    /**
+     * @dev addGreenlistAdmin is used to add greenlist admin account.
+     * Requirement:
+     * - This function can only called by owner of the contract
+     *
+     * @param greenlistAddress - Admin to be greenlisted
+     *
+     * Emits a {AddedGreenlistAdmin} event.
+     */
+
+    function addGreenlistAdmin(
+        address greenlistAddress,
+        AdminRoles allowPermission
+    ) external onlyOwner {
+        if (adminGreenlistedAddresses[greenlistAddress] != AdminRoles.NONE) {
+            revert AddressAlreadyExists();
         }
-        usersWhitelistRootHash = _whitelistedRoot;
+        adminGreenlistedAddresses[greenlistAddress] = allowPermission;
 
-        whitelistUsersMintingLimit =
-            _whitelistUsersMintingLimit *
-            landMintingLimitPerAddress;
+        emit AddedGreenlistAdmin(greenlistAddress, msg.sender);
+    }
 
-        publicMintingLimit = publicMintingLimit - whitelistUsersMintingLimit;
+    /**
+     * @dev removeGreenlistAdmin is used to remove greenlist admin account.
+     * Requirement:
+     * - This function can only called by owner of the contract
+     *
+     * @param greenlistAddress - Accounts to be removed
+     *
+     * Emits a {RemovedGreenlistAdmin} event.
+     */
 
-        emit UpdatedWhitelistUsersMintingLimit(
-            whitelistUsersMintingLimit,
-            usersWhitelistRootHash,
-            msg.sender
+    function removeGreenlistAdmin(address greenlistAddress) external onlyOwner {
+        if (adminGreenlistedAddresses[greenlistAddress] == AdminRoles.NONE) {
+            revert AddressNotExists();
+        }
+
+        adminGreenlistedAddresses[greenlistAddress] = AdminRoles.NONE;
+
+        emit RemovedGreenlistAdmin(greenlistAddress, msg.sender);
+    }
+
+    /**
+     * @dev updateGreenlistPartner is used to add/update greenlist partner account.
+     * Requirement:
+     * - This function can only called by manager role
+     *
+     * @param greenlistAddress - Partner to be greenlisted
+     *
+     * Emits a {UpdatedGreenlistPartner} event.
+     */
+
+    function updateGreenlistPartner(address greenlistAddress, bool status)
+        external
+    {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        if (greenlistedPartners[greenlistAddress] == status) {
+            revert AddressAlreadyExists();
+        }
+
+        greenlistedPartners[greenlistAddress] = status;
+
+        emit UpdatedGreenlistPartner(greenlistAddress, msg.sender);
+    }
+
+    /**
+     * @dev addNewPhase is used to add a new phase.
+     * Requirement:
+     * @param   phaseID - phaseID of new phase
+     * @param   name - name of new phase.
+     * @param   phaseMintReserveLimit - reserve limit for greenlist addresses
+     * @param   normalGreenlistRootHash - new normalGreenlistRootHash
+     * @param   normalMintLimitPerAddress - minting limit per address
+     * @param   premiumGreenlistRootHash - new premiumGreenlistRootHash
+     * @param   premiumMintLimitPerAddress - minting limit per address
+     * @param   isPremiumEnable - bool true/false
+     *
+     * Emits a {AddedNewPhase} event.
+     */
+
+    function addNewPhase(
+        uint256 phaseID,
+        string memory name,
+        uint256 phaseMintReserveLimit,
+        bytes32 normalGreenlistRootHash,
+        uint256 normalMintLimitPerAddress,
+        bytes32 premiumGreenlistRootHash,
+        uint256 premiumMintLimitPerAddress,
+        bool isPremiumEnable
+    ) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        if (isPremiumEnable) {
+            _validateNewPremiumPhaseInformation(
+                premiumGreenlistRootHash,
+                premiumMintLimitPerAddress
+            );
+
+            phase[phaseID].premiumGreenlistRootHash = premiumGreenlistRootHash;
+            phase[phaseID]
+                .premiumMintLimitPerAddress = premiumMintLimitPerAddress;
+        }
+
+        _validateNewPhaseInformation(
+            phaseID,
+            name,
+            normalMintLimitPerAddress,
+            phaseMintReserveLimit
+        );
+
+        phase[phaseID].normalGreenlistRootHash = normalGreenlistRootHash;
+        phase[phaseID].name = name;
+        phase[phaseID].normalMintLimitPerAddress = normalMintLimitPerAddress;
+        phase[phaseID].phaseMintReserveLimit = phaseMintReserveLimit;
+
+        phaseCount++;
+
+        emit AddedNewPhase(
+            phaseID,
+            name,
+            phaseMintReserveLimit,
+            normalMintLimitPerAddress,
+            normalGreenlistRootHash,
+            premiumGreenlistRootHash,
+            premiumMintLimitPerAddress
         );
     }
 
-    function isValid(bytes32[] memory proof, bytes32 leaf)
-        public
-        view
-        returns (bool)
-    {
-        return MerkleProof.verify(proof, usersWhitelistRootHash, leaf);
-    }
-
     /**
-     * @dev addWhitelistAdmin is used to add whitelist admin account.
+     * @dev activatePhase is used to activate the phase.
      * Requirement:
-     * - This function can only called by owner of the contract
+     * - This function can only called by manager role
      *
-     * @param whitelistAddress - Admin to be whitelisted
-     *
-     * Emits a {AddedWhitelistAdmin} event.
+     * @param phaseID - phaseID
+     * Emits a {UpdatedPhaseStatus} event.
      */
 
-    function addWhitelistAdmin(
-        address whitelistAddress,
-        AdminRoles allowPermission
-    ) external onlyOwner {
-        if (adminWhitelistedAddresses[whitelistAddress] != AdminRoles.NONE) {
-            revert AlreadyWhitelisted();
-        }
-        adminWhitelistedAddresses[whitelistAddress] = allowPermission;
+    function activatePhase(uint256 phaseID) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+        _validateNewPhaseParameters(phaseID);
 
-        emit AddedWhitelistAdmin(whitelistAddress, msg.sender);
+        phase[phaseID].isActivated = true;
+        phase[phaseID].phaseStatus = true;
+        currentPhaseID = phaseID;
+
+        emit UpdatedPhaseStatus(phaseID, phase[phaseID].phaseStatus);
     }
 
     /**
-     * @dev removeWhitelistAdmin is used to remove whitelist admin account.
+     * @dev deactivatePhase is used to deactivate an active/running phase.
      * Requirement:
-     * - This function can only called by owner of the contract
+     * - This function can only called by manager role.
      *
-     * @param whitelistAddress - Accounts to be removed
-     *
-     * Emits a {RemovedWhitelistAdmin} event.
+     * @param phaseID - PhaseID of an active phase.
+     * Emits a {UpdatedPhaseStatus} event.
      */
 
-    function removeWhitelistAdmin(address whitelistAddress) external onlyOwner {
-        if (adminWhitelistedAddresses[whitelistAddress] == AdminRoles.NONE) {
-            revert NotWhitelistedAddress();
+    function deactivatePhase(uint256 phaseID) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        if (phaseID == 0) {
+            revert PhaseIDCannotZero();
+        }
+        if (bytes(phase[phaseID].name).length == 0) {
+            revert PhaseIDNotExists();
+        }
+        if (!phase[phaseID].phaseStatus) {
+            revert AlreadyDeactivated();
         }
 
-        adminWhitelistedAddresses[whitelistAddress] = AdminRoles.NONE;
+        userMintingCount += phase[phaseID].phaseMintedCount;
+        phase[phaseID].phaseStatus = false;
+        currentPhaseID = 0;
 
-        emit RemovedWhitelistAdmin(whitelistAddress, msg.sender);
+        emit UpdatedPhaseStatus(phaseID, phase[phaseID].phaseStatus);
     }
 
     /**
-     * @dev mintLandWhitelistUsers is used to create a new land for white list users.
-     * Requirement:
-     * - This function can only called by whitelisted users
+     * @dev mintLandByAccessPass is used to mint new land.
+      * Requirement:
+     * - This function can only called by the address who have access pass.
+    
+     * @param metadataHash - drone metadata
+     * @param passID- pass reward id
+     * @param  passCopyNumber - copy number of specific Access pass minted at _passID
      *
-     * @param landId - landId
-     * @param to - address to mint land
-     * @param metadataHash - land metadata hash
+     * Emits a {DroneMinted} event.
+     */
+
+    function mintLandByAccessPass(
+        string memory metadataHash,
+        uint256 passID,
+        uint256 passCopyNumber
+    ) external {
+        (IAccessPass.PassStatus passStatus, , , , , ) = passInterface
+            .getAccessPassDetails(msg.sender, passID, passCopyNumber);
+
+        userMintingCount++;
+
+        if (
+            userMintingCount >
+            userMintingLimit - phase[currentPhaseID].phaseMintReserveLimit
+        ) {
+            revert UserMintingLimitExceeds();
+        }
+
+        validateAccessPassInfo(metadataHash, passID, passStatus);
+
+        passInterface.claimPass(msg.sender, passID, passCopyNumber);
+    }
+
+    /**
+     * @dev mintLandByPhase is used to create a new land by phases.
+     * Requirement:
+     * - This function can only called by greenlisted admin with minter role and greenlisted users if allowed.
+     *
+     * @param landID - landID
+     * @param to - address to mint the land
      * @param longitude - longitude
-     * @param latitude - latitud
-     * @param coordinates - polygonCoordinates
-     * @param proof - proof of whitelist users
+     * @param latitude - latitude
+     * @param metadataHash - metadataHash
+     * @param polygonCoordinates - polygonCoordinates
+     * @param proof - proof of greenlist users
      *
-     * Emits a {LandMintedByWhitelistUser} event.
+     * Emits a {LandMintedByPhase} event.
      */
 
-    function mintLandWhitelistUsers(
+    function mintLandByPhase(
         address to,
-        uint256 landId,
+        uint256 landID,
         string memory longitude,
         string memory latitude,
-        PolygonCoordinates[] memory coordinates,
         string memory metadataHash,
-        bytes32[] memory proof
-    ) public {
-        _verifyMetadataHash(metadataHash);
-
-        if (isPublicSaleActive) {
-            revert PublicSaleActivated();
-        }
-        if (!isValid(proof, keccak256(abi.encodePacked(msg.sender)))) {
-            revert NotWhitelistedAddress();
-        }
-        if (landMintedCount[msg.sender] >= landMintingLimitPerAddress) {
-            revert MintingLimitReached();
-        }
-        if (whitelistUsersMintingCount >= whitelistUsersMintingLimit) {
-            revert UsersMintingLimitReached();
-        }
-        whitelistUsersMintingCount++;
-
-        landMintedCount[msg.sender]++;
-
-        _storeLandInformation(
-            landId,
+        string memory polygonCoordinates,
+        bytes32[] memory proof,
+        UserType userType
+    ) external {
+        _validatePhaseInformation(to, 1, userType);
+        _validateGreenlistUser(to, proof, userType);
+        _validateLandInputParameters(
+            landID,
             longitude,
             latitude,
             metadataHash,
-            coordinates
+            polygonCoordinates
         );
 
-        _safeMint(to, landId);
+        _validationPhaseLandParameters(landID, to, userType);
 
-        emit LandMintedByWhitelistUser(landId, to, metadataHash);
+        phase[currentPhaseID].userLandMintedCount[to]++;
+        phase[currentPhaseID].phaseMintedCount++;
+        globalMintCount[to]++;
+
+        _storeLandInformation(
+            landID,
+            longitude,
+            latitude,
+            metadataHash,
+            polygonCoordinates
+        );
+        _safeMint(to, landID);
+
+        emit LandMintedByPhase(landID, to);
     }
 
     /**
-     * @dev mintLandWhitelistAdmin is used to create a new land only by whitelist admin.
+     * @dev mintLandByAdmin is used to create a new land only by greenlist admin.
      * Requirement:
-     * - This function can only called by whitelisted admin with minter role
+     * - This function can only called by greenlisted admin with minter role
      *
-     * @param landId - landId
+     * @param landID - landID
      * @param to - address to mint the land
-     * @param metadataHash - land metadata hash
      * @param longitude - longitude
-     * @param latitude - latitud
-     * @param coordinates - polygonCoordinates
+     * @param latitude - latitude
+     * @param metadataHash - metadataHash
+     * @param polygonCoordinates - polygonCoordinates
      *
      * Emits a {LandMintedByAdmin} event.
      */
 
-    function mintLandWhitelistAdmin(
+    function mintLandByAdmin(
         address to,
-        uint256 landId,
+        uint256 landID,
         string memory longitude,
         string memory latitude,
-        PolygonCoordinates[] memory coordinates,
-        string memory metadataHash
-    ) public {
-        _isWhitelistedAdmin(AdminRoles.MINTER);
-        _verifyMetadataHash(metadataHash);
+        string memory metadataHash,
+        string memory polygonCoordinates
+    ) external {
+        _isGreenlistedAdmin(AdminRoles.MINTER);
 
-        if (!isMintingPause) {
-            revert MintingStatusPaused();
-        }
-
-        if (platformMintingCount >= platformMintingLimit) {
-            revert PlatformMintingLimitReached();
-        }
+        _validateAdminLandInformation();
+        _validateLandInputParameters(
+            landID,
+            longitude,
+            latitude,
+            metadataHash,
+            polygonCoordinates
+        );
 
         platformMintingCount++;
 
         _storeLandInformation(
-            landId,
+            landID,
             longitude,
             latitude,
             metadataHash,
-            coordinates
+            polygonCoordinates
         );
+        _safeMint(to, landID);
 
-        _safeMint(to, landId);
-
-        emit LandMintedByAdmin(landId, to, metadataHash);
+        emit LandMintedByAdmin(landID, to);
     }
 
     /**
-     * @dev mintLandPublic is used to create a new land for public.
+     * @dev bulkMintLandsByAdmin is used to create bulk lands only by greenlist admin.
      * Requirement:
-     * - This function is for public minting.It can be accessible when minting is enabled and public sale status is true.
+     * - This function can only called by greenlisted admin with minter role
      *
-     * @param landId - landId
-     * @param to - address to mint the land
-     * @param metadataHash - land metadata hash
-     * @param longitude - longitude
-     * @param latitude - latitude
-     * @param coordinates - polygonCoordinates
-
+     * @param landInfo - mint land parameters in the form of a tuple.
      *
-     * Emits a {LandMintedByPublicUser} event.
+     * Emits a {BulkLandMintedByAdmin} event.
      */
 
-    function mintLandPublic(
-        address to,
-        uint256 landId,
-        string memory longitude,
-        string memory latitude,
-        PolygonCoordinates[] memory coordinates,
-        string memory metadataHash
-    ) public {
-        _verifyMetadataHash(metadataHash);
+    function bulkMintLandsByAdmin(BulkMintLandInfo calldata landInfo) external {
+        _isGreenlistedAdmin(AdminRoles.MINTER);
+        _validationBulkLandParametersLength(landInfo);
+        _validateAdminLandInformation();
 
-        if (!isPublicSaleActive) {
-            revert PublicSaleNotActive();
-        }
-        if (landMintedCount[msg.sender] >= landMintingLimitPerAddress) {
-            revert MintingLimitReached();
-        }
-        if (publicUsersMintingCount >= publicMintingLimit) {
-            revert UsersMintingLimitReached();
+        platformMintingCount += landInfo.landID.length;
+
+        _batchMint(landInfo, false);
+
+        emit BulkLandMintedByAdmin(landInfo.to, landInfo.landID, msg.sender);
+    }
+
+    /**
+     * @dev bulkMintLandsByPhase is used to create bulk land only w.r.t phase.
+     * Requirement:
+     * - This function can only called by greenlisted admin with minter role and greenlisted users if allowed.
+     *
+     * @param landInfo - bulk mint land in the form of a tuple.
+     * @param proof - proof of greenlist users
+     *
+     * Emits a {BulkLandMintedByPhase} event.
+     */
+
+    function bulkMintLandsByPhase(
+        BulkMintLandInfo calldata landInfo,
+        bytes32[] memory proof,
+        UserType userType
+    ) external {
+        _validateGreenlistUser(landInfo.to, proof, userType);
+        _validationBulkLandParametersLength(landInfo);
+        _validatePhaseInformation(msg.sender, landInfo.landID.length, userType);
+
+        phase[currentPhaseID].phaseMintedCount += landInfo.landID.length;
+
+        _batchMint(landInfo, true);
+
+        emit BulkLandMintedByPhase(landInfo.to, landInfo.landID, msg.sender);
+    }
+
+    /**
+     * @dev bulkMintLandForPartners is used to create a new land only for greenlist partners.
+     * Requirement:
+     * - This function can only called by greenlisted admin with minter role
+     *
+     * @param landInfo - bulk mint land in the form of a tuple.
+     *
+     * Emits a {BatchLandMintedForPartners} event.
+     */
+
+    function bulkMintLandForPartners(BulkMintLandInfo calldata landInfo)
+        external
+    {
+        _isGreenlistedAdmin(AdminRoles.MINTER);
+        _validationBulkLandParametersLength(landInfo);
+
+        userMintingCount += landInfo.landID.length;
+
+        if (
+            userMintingCount >
+            userMintingLimit - phase[currentPhaseID].phaseMintReserveLimit
+        ) {
+            revert UserMintingLimitExceeds();
         }
 
-        publicUsersMintingCount++;
-        landMintedCount[msg.sender]++;
+        if (!greenlistedPartners[landInfo.to]) {
+            revert AddressNotExists();
+        }
 
-        _storeLandInformation(
-            landId,
-            longitude,
-            latitude,
-            metadataHash,
-            coordinates
+        _batchMint(landInfo, false);
+
+        emit BatchLandMintedForPartners(
+            landInfo.to,
+            landInfo.landID,
+            msg.sender
         );
+    }
 
-        _safeMint(to, landId);
+    /**
+     * @dev getUserLandMintedCount is used to get user minted count per address by phases.
+     * Requirement:
+     * - This function can called by anyone.
+     *
+     * @param userAddress - address
+     * @param phaseID - id
+     */
 
-        emit LandMintedByPublicUser(landId, to, metadataHash);
+    function getUserLandMintedCount(uint256 phaseID, address userAddress)
+        external
+        view
+        returns (uint256, uint256)
+    {
+        return (
+            phase[phaseID].userLandMintedCount[userAddress],
+            userMintingLimit - globalMintCount[userAddress]
+        );
     }
 
     /**
@@ -497,143 +548,162 @@ contract LandContract is
      * Requirement:
      * - This function can called by anyone.
      *
-     * @param _address - address to get land info
+     * @param userAddress - address to get land info
      */
 
-    function getLandsByAddress(address _address)
-        public
+    function getLandsByAddress(address userAddress)
+        external
         view
-        returns (Land[] memory)
+        returns (ReturnLandInfo[] memory)
     {
-        Land[] memory landInfo = new Land[](balanceOf(_address));
+        ReturnLandInfo[] memory lands = new ReturnLandInfo[](
+            balanceOf(userAddress)
+        );
 
-        if (balanceOf(_address) == 0) revert AddressNotExist();
-
-        uint objectIndex = 0;
-        for (uint i = 0; i < balanceOf(_address); i++) {
-            uint256 tokenId = tokenOfOwnerByIndex(_address, i);
-            landInfo[objectIndex].metadataHash = land[tokenId].metadataHash;
-            landInfo[objectIndex].longitude = land[tokenId].longitude;
-            landInfo[objectIndex].latitude = land[tokenId].latitude;
-            landInfo[objectIndex].polygonCoordinates = land[tokenId]
-                .polygonCoordinates;
-            objectIndex++;
+        for (uint256 i = 0; i < balanceOf(userAddress); i++) {
+            uint256 landID = tokenOfOwnerByIndex(userAddress, i);
+            lands[i].landID = landID;
+            lands[i].longitude = land[landID].longitude;
+            lands[i].latitude = land[landID].latitude;
+            lands[i].metadataHash = land[landID].metadataHash;
+            lands[i].polygonCoordinates = land[landID].polygonCoordinates;
         }
 
-        return landInfo;
+        return lands;
     }
 
     /**
-     * @dev getLandById is used to get land info by landId.
+     * @dev getLandById is used to get land info by landID.
      * Requirement:
      * - This function can called by anyone
      *
-     * @param landId - landId to get land info
+     * @param landID - landID to get land info
      */
 
-    function getLandById(uint landId)
-        public
+    function getLandById(uint256 landID)
+        external
         view
         returns (
             string memory,
             string memory,
             string memory,
-            PolygonCoordinates[] memory
+            string memory
         )
     {
-        if (!_exists(landId)) {
-            revert IdNotExist();
-        }
-
-        PolygonCoordinates[] memory coordinates = new PolygonCoordinates[](
-            land[landId].polygonCoordinates.length
-        );
-
-        for (uint i = 0; i < land[landId].polygonCoordinates.length; ) {
-            coordinates[i].longitude = land[landId]
-                .polygonCoordinates[i]
-                .longitude;
-            coordinates[i].latitude = land[landId]
-                .polygonCoordinates[i]
-                .latitude;
-
-            unchecked {
-                i++;
-            }
-        }
-
         return (
-            land[landId].metadataHash,
-            land[landId].longitude,
-            land[landId].latitude,
-            coordinates
+            land[landID].longitude,
+            land[landID].latitude,
+            land[landID].metadataHash,
+            land[landID].polygonCoordinates
         );
-    }
-
-    /**
-     * @dev updatePublicSaleStatus is used to active the public sale.
-     * Requirement:
-     * - Only Manger role can call this method.
-     *
-     * @param status - to true/false
-     */
-
-    function updatePublicSaleStatus(bool status) public returns (bool) {
-        _isWhitelistedAdmin(AdminRoles.MANAGER);
-
-        if (whitelistUsersMintingCount != whitelistUsersMintingLimit) {
-            publicMintingLimit +=
-                whitelistUsersMintingLimit -
-                whitelistUsersMintingCount;
-        }
-
-        isPublicSaleActive = status;
-
-        return true;
     }
 
     /**
      * @dev tokenURI is used to get tokenURI link
-     * @param landId - ID of drone
-     * @return string
+     *
+     * @param landID - ID of land
+     *
      */
 
-    function tokenURI(uint landId)
+    function tokenURI(uint256 landID)
         public
         view
         override(ERC721Upgradeable)
         returns (string memory)
     {
-        if (!_exists(landId)) {
-            revert IdNotExist();
-        }
-        return string(abi.encodePacked(baseURI, land[landId].metadataHash));
+        return string(abi.encodePacked(baseURI, land[landID].metadataHash));
     }
 
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 tokenId
-    )
-        internal
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        whenNotPaused
-    {
-        super._beforeTokenTransfer(from, to, tokenId);
+    /**
+     * @dev getPhaseStatus is used to phase status info by phaseID.
+     * Requirement:
+     * - This function can be called by anyone
+     *
+     * @param phaseID - phaseID to get phase status info
+     */
+
+    function getPhaseStatus(uint256 phaseID) public view returns (bool) {
+        return phase[phaseID].phaseStatus;
     }
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyOwner
-    {}
+    /**
+     * @dev getPhaseInfo is used to get phase info by phaseID.
+     * Requirement:
+     * - This function can be called by anyone
+     *
+     * @param phaseID - phaseID to get phase info
+     */
 
-    function supportsInterface(bytes4 interfaceId)
-        public
+    function getPhaseInfo(uint256 phaseID)
+        external
         view
-        override(ERC721Upgradeable, ERC721EnumerableUpgradeable)
-        returns (bool)
+        returns (ReturnPhaseInfo memory)
     {
-        return super.supportsInterface(interfaceId);
+        ReturnPhaseInfo memory phaseDetails;
+
+        phaseDetails.name = phase[phaseID].name;
+        phaseDetails.phaseStatus = phase[phaseID].phaseStatus;
+        phaseDetails.isActivated = phase[phaseID].isActivated;
+        phaseDetails.normalGreenlistRootHash = phase[phaseID]
+            .normalGreenlistRootHash;
+        phaseDetails.normalMintLimitPerAddress = phase[phaseID]
+            .normalMintLimitPerAddress;
+        phaseDetails.premiumGreenlistRootHash = phase[phaseID]
+            .premiumGreenlistRootHash;
+        phaseDetails.premiumMintLimitPerAddress = phase[phaseID]
+            .premiumMintLimitPerAddress;
+        phaseDetails.phaseMintReserveLimit = phase[phaseID]
+            .phaseMintReserveLimit;
+        phaseDetails.phaseMintedCount = phase[phaseID].phaseMintedCount;
+
+        return phaseDetails;
+    }
+
+    /**
+     * @dev updateTransferStatus is used to update the isTransferAllowed value for enabling and disabling Transfer feature.
+     *
+     * Requirement:
+     *
+     * - This function can only called by manager role.
+     *
+     * @param _status - true or false value
+     *
+     * Emits a {UpdatedTransferStatus} event.
+     */
+
+    function updateTransferStatus(bool _status) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        if (isTransferAllowed == _status) {
+            revert AlreadySameStatus();
+        }
+
+        isTransferAllowed = _status;
+
+        emit UpdatedTransferStatus(_status, msg.sender);
+    }
+
+    /**
+     * @dev updatePartnerTransferStatus is used to update the isPartnerTransferAllowed value for enabling and disabling Transfer feature.
+     *
+     * Requirement:
+     *
+     * - This function can only called by manager role.
+     *
+     * @param _status - true or false value
+     *
+     * Emits a {UpdatedTransferStatus} event.
+     */
+
+    function updatePartnerTransferStatus(bool _status) external {
+        _isGreenlistedAdmin(AdminRoles.MANAGER);
+
+        if (isPartnerTransferAllowed == _status) {
+            revert AlreadySameStatus();
+        }
+
+        isPartnerTransferAllowed = _status;
+
+        emit UpdatedTransferStatus(_status, msg.sender);
     }
 }

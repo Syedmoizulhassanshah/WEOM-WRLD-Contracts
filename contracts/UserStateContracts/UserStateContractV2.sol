@@ -5,7 +5,7 @@ import "../utils/CustomErrors.sol";
 import "./UserStateCore.sol";
 import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
 
-contract UserStateContractV1 is UserStateCore {
+contract UserStateContractV2 is UserStateCore {
     using ECDSAUpgradeable for bytes32;
 
     function _isWhitelistedAdmin(AdminRoles requiredRole) internal view {

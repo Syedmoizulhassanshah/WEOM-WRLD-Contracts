@@ -1,6 +1,7 @@
 require('@nomiclabs/hardhat-ethers')
 require('@openzeppelin/hardhat-upgrades')
 require('@nomiclabs/hardhat-etherscan')
+require('hardhat-contract-sizer');
 require('dotenv').config()
 
 task('accounts', 'Prints the list of accounts', async (taskArgs, hre) => {

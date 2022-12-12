@@ -1,0 +1,63 @@
+Arguments: 
+  /home/umer/.nvm/versions/node/v16.13.2/bin/node /home/umer/.nvm/versions/node/v16.13.2/bin/yarn add --dev hardhat-contract-sizer
+
+PATH: 
+  /home/umer/.nvm/versions/node/v16.13.2/bin:/home/umer/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+
+Yarn version: 
+  1.22.17
+
+Node version: 
+  16.13.2
+
+Platform: 
+  linux x64
+
+Trace: 
+  Error: https://registry.yarnpkg.com/@nomiclabs%2fhardhat-ethers: tunneling socket could not be established, cause=getaddrinfo EAI_AGAIN proxy
+      at ClientRequest.onError (/home/umer/.nvm/versions/node/v16.13.2/lib/node_modules/yarn/lib/cli.js:152369:17)
+      at Object.onceWrapper (node:events:510:26)
+      at ClientRequest.emit (node:events:390:28)
+      at Socket.socketErrorListener (node:_http_client:447:9)
+      at Socket.emit (node:events:390:28)
+      at emitErrorNT (node:internal/streams/destroy:157:8)
+      at emitErrorCloseNT (node:internal/streams/destroy:122:3)
+      at processTicksAndRejections (node:internal/process/task_queues:83:21)
+
+npm manifest: 
+  {
+    "name": "wrld-blockchain",
+    "version": "1.0.0",
+    "description": "Wrld blockchain repository for development and deployments.",
+    "main": "index.js",
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Umer Aqeel",
+    "license": "ISC",
+    "devDependencies": {
+      "@nomicfoundation/hardhat-toolbox": "^1.0.2",
+      "ethers": "^5.7.0",
+      "hardhat": "^2.10.1"
+    },
+    "dependencies": {
+      "@nomiclabs/hardhat-ethers": "^2.1.1",
+      "@nomiclabs/hardhat-etherscan": "^3.1.0",
+      "@nomiclabs/hardhat-waffle": "^2.0.3",
+      "@openzeppelin/contracts": "^4.7.0",
+      "@openzeppelin/contracts-upgradeable": "^4.7.1",
+      "@openzeppelin/hardhat-upgrades": "^1.19.0",
+      "chai": "^4.3.6",
+      "dotenv": "^16.0.1",
+      "ethereum-waffle": "^3.4.4",
+      "ethereumjs-util": "^7.1.5",
+      "keccak256": "^1.0.6",
+      "merkletreejs": "^0.2.32"
+    }
+  }
+
+yarn manifest: 
+  No manifest
+
+Lockfile: 
+  No lockfile

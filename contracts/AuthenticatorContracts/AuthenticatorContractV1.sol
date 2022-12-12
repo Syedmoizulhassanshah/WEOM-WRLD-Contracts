@@ -2,7 +2,7 @@
 pragma solidity 0.8.15;
 
 import "hardhat/console.sol";
-
+import "../utils/CustomErrors.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -21,9 +21,6 @@ contract AuthenticatorContractV1 is
 
     mapping(address => mapping(AdminRoles => bool))
         public adminWhitelistedAddresses;
-
-    error AddressIsAlreadyWhitelisted();
-    error NotWhitelistedAddress();
 
     event AddedWhitelistAdmins(
         address[] whitelistedAddress,
@@ -48,7 +45,7 @@ contract AuthenticatorContractV1 is
 
     function _isWhitelistedAdmin(AdminRoles requiredRole) internal view {
         if (adminWhitelistedAddresses[msg.sender][requiredRole] != true) {
-            revert NotWhitelistedAddress();
+            revert AddressAlreadyExists();
         }
     }
 
@@ -71,7 +68,7 @@ contract AuthenticatorContractV1 is
             adminWhitelistedAddresses[whitelistAddress][allowPermission] !=
             false
         ) {
-            revert AddressIsAlreadyWhitelisted();
+            revert AlreadyExists("Whitelisted address");
         }
         adminWhitelistedAddresses[whitelistAddress][allowPermission] = true;
 
@@ -132,7 +129,7 @@ contract AuthenticatorContractV1 is
             adminWhitelistedAddresses[whitelistAddress][removePermission] ==
             false
         ) {
-            revert NotWhitelistedAddress();
+            revert AddressNotExists();
         }
 
         adminWhitelistedAddresses[whitelistAddress][removePermission] = false;
@@ -154,9 +151,8 @@ contract AuthenticatorContractV1 is
         else return false;
     }
 
-    function adminRolesLength() internal view returns (uint8) {
-        uint8 adminEnumLength = uint8(type(AdminRoles).max) + 1;
-        return adminEnumLength;
+    function adminRolesLength() internal pure returns (uint8) {
+        return uint8(type(AdminRoles).max) + 1;
     }
 
     /**
