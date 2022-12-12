@@ -1,0 +1,7 @@
+{
+    "editor.defaultFormatter": "NomicFoundation.hardhat-solidity",
+    "editor.formatOnSave": true,
+    "[javascript]": {
+        "editor.defaultFormatter": "SimonSiefke.prettier-vscode"
+    }
+}
